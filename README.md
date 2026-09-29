@@ -20,7 +20,7 @@
 
 <div align="center">
 
-![Escritorio BSPWM con Polybar y tema Rosé Pine](https://i.ibb.co/dbRt8qC/2021-11-06-192234-1920x1080-scrot.png)
+![Escritorio BSPWM con Polybar y tema Rosé Pine](.images/screenshot.png)
 
 *BSPWM con Polybar, tema Rosé Pine y CaskaydiaCove Nerd Font*
 
