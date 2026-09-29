@@ -1,0 +1,122 @@
+#!/bin/sh
+
+# ============================================
+#  bspwmrc - BSPWM + SXHKD + Polybar (Rosé Pine)
+#  Autor: Borja Candel
+#
+#  Este archivo se ejecuta al arrancar bspwm. Es idempotente:
+#  todos los servicios se lanzan una sola vez, así se puede usar
+#  tanto con 'xinit ~/.xinitrc' como desde un gestor de sesiones.
+# ============================================
+
+# --- Utilidades -------------------------------------------------------
+have() { command -v "$1" >/dev/null 2>&1; }
+
+# Lanza un comando sólo si no hay ya una instancia corriendo
+run_once() {
+    _proc="$1"; shift
+    pgrep -x "$_proc" >/dev/null 2>&1 && return 0
+    "$@" >/dev/null 2>&1 &
+}
+
+# --- Fondo de pantalla --------------------------------------------------
+# Usa ~/.wallpapers/bosque.png si existe; si no, la primera imagen de
+# ~/.wallpapers; si no hay ninguna, un color sólido de Rosé Pine.
+set_wallpaper() {
+    _wp="$HOME/.wallpapers/bosque.png"
+    [ -f "$_wp" ] || _wp="$(ls -1 "$HOME"/.wallpapers/*.png "$HOME"/.wallpapers/*.jpg \
+                             "$HOME"/.wallpapers/*.jpeg 2>/dev/null | head -n 1)"
+    if [ -n "$_wp" ] && [ -f "$_wp" ]; then
+        run_once feh feh --bg-fill "$_wp"
+    else
+        xsetroot -solid '#191724' 2>/dev/null
+    fi
+}
+
+# --- Arranque de la sesión ---------------------------------------------
+# Atajos de teclado
+run_once sxhkd sxhkd
+
+# Nombre del gestor de ventanas (para que las barras lo lean bien)
+if have wmname; then
+    run_once wmname wmname LG3D
+fi
+
+# Notificaciones
+if have dunst; then
+    run_once dunst dunst
+fi
+
+# Compositor
+# picom >= 13 eliminó --experimental-backends, así que se comprueba.
+if have picom; then
+    if picom --help 2>&1 | grep -q -- '--experimental-backends'; then
+        run_once picom picom --experimental-backends
+    else
+        run_once picom picom
+    fi
+fi
+
+# Fondo
+set_wallpaper
+
+# Sonido de arranque (si existe y hay reproductor)
+if [ -f "$HOME/.sounds/startup.mp3" ] && have play; then
+    run_once play play "$HOME/.sounds/startup.mp3"
+fi
+
+# Barra
+if [ -x "$HOME/.config/polybar/launch.sh" ]; then
+    run_once polybar "$HOME/.config/polybar/launch.sh"
+fi
+
+# Bandeja del sistema
+have volumeicon && run_once volumeicon volumeicon
+have cbatticon  && run_once cbatticon  cbatticon
+have udiskie    && run_once udiskie    udiskie -t
+have nm-applet  && run_once nm-applet  nm-applet
+
+# Cursor
+xsetroot -cursor_name left_ptr 2>/dev/null
+
+# Monitor setup
+bspc monitor -d I II III IV V VI VII VIII IX X
+
+# BSPWM config
+bspc config border_width         2
+bspc config window_gap           8
+bspc config split_ratio          0.52
+bspc config borderless_monocle   true
+bspc config gapless_monocle      true
+
+# Colors (Rose Pine)
+bspc config focused_border_color   "#EB6F92"
+bspc config normal_border_color    "#26233A"
+bspc config presel_feedback_color  "#EB6F92"
+bspc config active_border_color    "#EB6F92"
+
+# Mouse actions
+bspc config pointer_action1 move
+bspc config pointer_action2 resize_side
+bspc config pointer_action3 resize_corner
+
+# Focus follows pointer
+bspc config focus_follows_pointer true
+bspc config pointer_follows_focus false
+
+# Window rules
+bspc rule -a Gimp desktop='^8' state=floating follow=on
+bspc rule -a Chromium desktop='^2'
+bspc rule -a mplayer2 state=floating
+bspc rule -a Screenkey manage=off
+bspc rule -a Thunar state=floating center=true
+bspc rule -a Steam state=floating center=true
+bspc rule -a minecraft-launcher state=floating center=true
+bspc rule -a zoom state=floating
+bspc rule -a telegram-desktop state=floating center=true
+bspc rule -a TelegramDesktop state=floating center=true
+bspc rule -a xfce4-terminal state=floating center=true
+bspc rule -a Alacritty state=floating center=true
+bspc rule -a Pavucontrol state=floating center=true
+bspc rule -a Lxappearance state=floating center=true
+bspc rule -a Nitrogen state=floating center=true
