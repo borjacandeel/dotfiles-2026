@@ -322,11 +322,11 @@ setup_display_manager() {
     done
 
     if sudo pacman -S --needed --noconfirm "$choice"; then
-        if sudo systemctl enable --now "${choice}.service"; then
+        if sudo systemctl enable "${choice}.service"; then
             step "Display manager activo: $choice"
         else
             warn "Se instaló $choice pero no se pudo activar"
-            plain "Actívalo con: sudo systemctl enable --now ${choice}.service"
+            plain "Actívalo con: sudo systemctl enable ${choice}.service"
         fi
     else
         warn "No se pudo instalar $choice"
