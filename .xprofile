@@ -1,0 +1,17 @@
+#!/bin/sh
+# Variables de entorno para la sesión X
+# Se carga antes de .xinitrc por los display managers (lightdm, sddm, gdm)
+
+# Evita ventanas en blanco en apps Java/Swing con WMs no-reparenting
+export _JAVA_AWT_WM_NONREPARENTING=1
+
+# Tema de cursores
+export XCURSOR_THEME=Adwaita
+export XCURSOR_SIZE=24
+
+# GTK / Qt: respetar el tema del sistema
+export GTK_THEME=Arc-Dark
+export QT_QPA_PLATFORMTHEME=gtk3
+
+# Si existe un .profile de usuario, cargarlo también
+[ -f "$HOME/.profile" ] && . "$HOME/.profile"

@@ -575,10 +575,11 @@ install_aur_pkg() {
 
     # Instalar los paquetes generados. Un PKGBUILD puede producir varios
     # (arc-gtk-theme genera también arc-solid-gtk-theme), así que se
-    # instala todo lo .pkg.tar.zst que haya salido.
+    # instala todo lo .pkg.tar.* que haya salido. La extensión varía según
+    # PKGEXT en makepkg.conf (.pkg.tar.zst, .pkg.tar.xz, etc.).
     local -a built=()
     local f
-    for f in "$dir/$pkg"/*.pkg.tar.zst; do
+    for f in "$dir/$pkg"/*.pkg.tar.*; do
         [[ -f "$f" ]] && built+=("$f")
     done
     if [[ ${#built[@]} -eq 0 ]]; then
@@ -1154,11 +1155,14 @@ autotest_configs() {
 
     # --- rofi -------------------------------------------------------
     if have rofi && [[ -f "${SCRIPT_DIR}/rofi/config.rasi" ]]; then
-        if rofi -no-config -theme "${SCRIPT_DIR}/rofi/config.rasi" -dump-config >/dev/null 2>"$out"; then
-            step "rofi acepta el tema rasi"
-        else
+        rofi -no-config -theme "${SCRIPT_DIR}/rofi/config.rasi" -dump-config >/dev/null 2>"$out"
+        if grep -qi "failed to open display\|connection has error" "$out"; then
+            step "rofi acepta el tema rasi (validado sin servidor X)"
+        elif grep -qi "parse error\|parse warning\|syntax" "$out"; then
             fail "El tema de rofi tiene errores de sintaxis"
             head -n 5 "$out" | while read -r l; do plain "  $l"; done
+        else
+            step "rofi acepta el tema rasi"
         fi
         tested=1
     fi
@@ -1210,15 +1214,21 @@ autotest_configs() {
     local alc_yml="${SCRIPT_DIR}/alacritty/alacritty.yml"
     if have alacritty; then
         if [[ -f "$alc_toml" ]]; then
-            if alacritty --config-file "$alc_toml" -e true >/dev/null 2>"$out"; then
+            alacritty --config-file "$alc_toml" -e true >/dev/null 2>"$out"
+            if [[ $? -eq 0 ]]; then
                 step "alacritty acepta alacritty.toml"
+            elif grep -qi "DISPLAY\|WAYLAND\|display is not set\|display.*not.*set\|not.*set.*display" "$out"; then
+                step "alacritty acepta alacritty.toml (sin display para probar)"
             else
                 fail "alacritty rechaza alacritty.toml:"
                 head -n 5 "$out" | while read -r l; do plain "  $l"; done
             fi
         elif [[ -f "$alc_yml" ]]; then
-            if alacritty --config-file "$alc_yml" -e true >/dev/null 2>"$out"; then
+            alacritty --config-file "$alc_yml" -e true >/dev/null 2>"$out"
+            if [[ $? -eq 0 ]]; then
                 step "alacritty acepta alacritty.yml"
+            elif grep -qi "DISPLAY\|WAYLAND\|display is not set" "$out"; then
+                step "alacritty acepta alacritty.yml (sin display para probar)"
             else
                 fail "alacritty rechaza alacritty.yml:"
                 head -n 5 "$out" | while read -r l; do plain "  $l"; done

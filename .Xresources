@@ -1,0 +1,50 @@
+! Xresources — Rosé Pine
+! Fuentes, cursor y paleta de colores para apps X clásicas (xterm, dmenu…)
+
+! Cursor
+Xcursor.theme: Adwaita
+Xcursor.size:  24
+
+! Fuente por defecto (Nerd Font para iconos en polybar/rofi)
+Xft.font:      CaskaydiaCove Nerd Font:size=11
+Xft.dpi:       96
+Xft.antialias: true
+Xft.hinting:   true
+Xft.hintstyle: hintfull
+Xft.rgba:      rgb
+
+! Paleta Rosé Pine (main)
+#define col_base    #191724
+#define col_surface #26233a
+#define col_overlay #403d52
+#define col_muted   #6e6a86
+#define col_subtle  #908caa
+#define col_text    #e0def4
+#define col_love    #eb6f92
+#define col_gold    #f6c177
+#define col_rose    #ebbcba
+#define col_pine    #31748f
+#define col_foam    #9ccfd8
+#define col_iris    #c4a7e7
+
+! Colores del terminal X (0-15)
+*.foreground:  col_text
+*.background:  col_base
+*.cursorColor: col_text
+
+*.color0:  col_base
+*.color1:  col_love
+*.color2:  col_pine
+*.color3:  col_gold
+*.color4:  col_iris
+*.color5:  col_rose
+*.color6:  col_foam
+*.color7:  col_subtle
+*.color8:  col_overlay
+*.color9:  col_love
+*.color10: col_pine
+*.color11: col_gold
+*.color12: col_iris
+*.color13: col_rose
+*.color14: col_foam
+*.color15: col_text
