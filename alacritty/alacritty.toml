@@ -56,11 +56,15 @@ x = 0
 y = 0
 
 # --------------------------------------------------------------------
+# Terminal environment
+# --------------------------------------------------------------------
+[env]
+TERM = "xterm-256color"
+COLORTERM = "truecolor"
+
+# --------------------------------------------------------------------
 # Colores · Rosé Pine
 # --------------------------------------------------------------------
-[colors]
-draw_bold_text_with_bright_colors = true
-
 [colors.primary]
 background = "#191724"   # base
 foreground = "#E0DEF4"   # text
