@@ -40,7 +40,7 @@ for _ in {1..25}; do
 done
 
 # --- Lanzar ----------------------------------------------------------
-polybar "$BAR_NAME" --config "$CONFIG" >>"$LOG" 2>&1
+polybar -c "$CONFIG" "$BAR_NAME" >>"$LOG" 2>&1
 
 # Si polybar muere al instante el error está en el log: dejarlo claro.
 sleep 0.3

@@ -47,7 +47,7 @@ cursor-scroll = ns-resize
 
 [module/launcher]
 type = custom/text
-content = "  "
+content = " "
 content-margin = 2
 click-left = rofi -show drun -theme ~/.config/rofi/config.rasi
 
@@ -157,7 +157,8 @@ label-muted-foreground = ${colors.color8}
 label-muted-background = ${colors.background}
 label-muted-padding = 2
 
-click-right = pavucontrol
+click-left = pavucontrol &
+click-right = pavucontrol &
 
 [module/temperature]
 type = internal/temperature

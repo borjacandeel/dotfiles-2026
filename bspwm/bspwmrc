@@ -73,7 +73,7 @@ fi
 
 # Bandeja del sistema
 have volumeicon && run_once volumeicon volumeicon
-have cbatticon  && run_once cbatticon  cbatticon
+ls /sys/class/power_supply/BAT* >/dev/null 2>&1 && have cbatticon && run_once cbatticon cbatticon
 have udiskie    && run_once udiskie    udiskie -t
 have nm-applet  && run_once nm-applet  nm-applet
 
@@ -118,8 +118,8 @@ bspc rule -a minecraft-launcher state=floating center=true
 bspc rule -a zoom state=floating
 bspc rule -a telegram-desktop state=floating center=true
 bspc rule -a TelegramDesktop state=floating center=true
-bspc rule -a xfce4-terminal state=floating center=true
-bspc rule -a Alacritty state=floating center=true
+bspc rule -a xfce4-terminal state=tiled
+bspc rule -a Alacritty state=tiled
 bspc rule -a Pavucontrol state=floating center=true
 bspc rule -a Lxappearance state=floating center=true
 bspc rule -a Nitrogen state=floating center=true
