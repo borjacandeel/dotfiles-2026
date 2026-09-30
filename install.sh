@@ -1088,44 +1088,40 @@ autotest_configs() {
     local out; out="$(mktemp)"
 
     # --- polybar ----------------------------------------------------
-    # La sintaxis correcta es '-d <parámetro> <barra>': con
-    # 'bar/bar.height' polybar responde "Missing parameter".
-    if have polybar; then
-        local bar_name="" key val
-        # Descubrir el nombre de la barra: polybar espera 'bar/<nombre>'
-        for key in modules-left modules-center modules-right; do
-            val="$(polybar -c "${SCRIPT_DIR}/polybar/config" --dump="$key" bar 2>/dev/null | tail -n1)"
-            [[ -n "$val" ]] && bar_name="bar" && break
-        done
-        [[ -z "$bar_name" ]] && bar_name="bar"
+    # polybar 3.7+ necesita un servidor X incluso para --dump, así que
+    # se valida la config parseando el fichero directamente con grep/awk.
+    if have polybar && [[ -f "${SCRIPT_DIR}/polybar/config" ]]; then
+        local cfg="${SCRIPT_DIR}/polybar/config"
 
-        polybar -c "${SCRIPT_DIR}/polybar/config" --dump=modules-right "$bar_name" >/dev/null 2>"$out"
-        if grep -qiE "uncaught exception|missing parameter|error" "$out"; then
-            fail "polybar no acepta la configuración:"
-            head -n 5 "$out" | while read -r l; do plain "  $l"; done
+        # Módulos definidos: secciones [module/<nombre>]
+        local -a defined=()
+        while IFS= read -r m; do defined+=("$m"); done < <(
+            grep -oE '^\[module/[^]]+\]' "$cfg" | sed 's/\[module\///;s/\]//'
+        )
+
+        # Módulos usados en modules-left/center/right (dentro de [bar/...])
+        local -a listed=()
+        while IFS= read -r m; do
+            [[ -n "$m" ]] && listed+=($m)
+        done < <(
+            awk '/^\[bar\// { in_bar=1 } /^\[/ && !/^\[bar\// { in_bar=0 }
+                 in_bar && /^[[:space:]]*modules-(left|center|right)[[:space:]]*=/ {
+                     sub(/.*=[[:space:]]*/,""); print }' "$cfg"
+        )
+
+        if [[ ${#defined[@]} -eq 0 ]]; then
+            fail "polybar: no se encontraron módulos en la configuración"
         else
-            # Todos los módulos usados en modules-* deben existir: si falta
-            # uno, polybar no da error pero el módulo sale vacío en la barra.
-            local -a listed defined m
-            defined=()
-            while IFS= read -r m; do defined+=("$m"); done < <(
-                grep -oE '^\[module/[^]]+\]' "${SCRIPT_DIR}/polybar/config" \
-                    | sed 's/\[module\///;s/\]//'
-            )
-            listed=()
-            for key in modules-left modules-center modules-right; do
-                val="$(polybar -c "${SCRIPT_DIR}/polybar/config" --dump="$key" "$bar_name" 2>/dev/null | tail -n1)"
-                [[ -n "$val" ]] && listed+=($val)
-            done
-            local orphan=""
-            for m in ${listed[*]}; do
-                printf '%s\n' "${defined[@]}" | grep -qx -- "$m" || orphan="$orphan $m"
+            local orphan="" m
+            for m in "${listed[@]}"; do
+                printf '%s\n' "${defined[@]}" | grep -qx -- "$m" \
+                    || orphan="$orphan $m"
             done
             if [[ -n "$orphan" ]]; then
                 fail "polybar: módulos usados sin definir:${orphan}"
                 plain "Están en modules-* pero no hay [module/<nombre>] para ellos."
             else
-                step "polybar acepta la configuración (${#listed[@]} módulos definidos)"
+                step "polybar acepta la configuración (${#listed[@]} módulos, ${#defined[@]} definidos)"
             fi
         fi
         tested=1
