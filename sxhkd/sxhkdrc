@@ -113,6 +113,33 @@ super + {Left,Down,Up,Right}
 	bspc node -v {-20 0,0 20,0 -20,20 0}
 
 #
+# applications
+#
+
+# terminal
+super + Return
+	alacritty
+
+# launcher
+super + d
+	rofi -show drun -theme ~/.config/rofi/config.rasi
+
+# window switcher
+# Ojo: 'super + Tab' entra en conflicto con
+# 'super + {grave,Tab}' del bloque de focus/swap de más arriba. sxhkd avisa
+# de la interferencia y elige uno de los dos Binding, así que se usa Ctrl+Tab.
+ctrl + Tab
+	rofi -show window -theme ~/.config/rofi/config.rasi
+
+# browse disk usage
+super + e
+	pcmanfm ~/
+
+# reconfigure/reload everything
+super + shift + r
+	bspc wm -r
+
+#
 # wallpaper
 #
 

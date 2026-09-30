@@ -61,7 +61,7 @@
 | **Notificaciones** | `dunst` | Iconos Papirus, historial,-ops categories |
 | **Launcher** | `rofi` | Apps, comandos y ventanas con estilo Rosé Pine |
 | **Archivos** | `pcmanfm` | Terminal y fuente Nerd Font configurados |
-| **Fondos** | `feh` | 7 wallpapers incluidos, rotación con atajos |
+| **Fondos** | `feh` | Cambio de wallpaper con atajos y script propio |
 | **Fuentes** | CaskaydiaCove | Nerd Font + símbolos extras |
 
 ---
@@ -101,7 +101,14 @@ archivos que ya tengas en `~/.config` se **resguardan** automáticamente como
 | `--no-dm` | No configura display manager (arrancarás con `xinit`) |
 | `--dm <nombre>` | Fuerza un display manager: `lightdm`, `sddm`, `gdm` o `none` |
 | `--check` | **Solo diagnóstico.** No instala ni modifica nada |
+| `--no-wallpaper` | No generar un fondo de pantalla por defecto |
+| `--no-log` | No escribir el fichero de log |
+| `--log <fichero>` | Guardar el log en la ruta indicada |
 | `-h`, `--help` | Muestra el panel de ayuda |
+
+> **No ejecutes el instalador con `sudo`.** `makepkg` se niega a correr como root y
+> con root se pierden las variables de tu usuario (`HOME`, XDG…). El script ya pide
+> la contraseña de sudo por ti cuando hace falta.
 
 ### Panel de ayuda 🆘
 
@@ -122,7 +129,10 @@ Uso: ./install.sh [opciones]
   --no-shell       No cambiar la shell por defecto a fish
   --no-dm          No configurar display manager (arranca con xinit)
   --dm <nombre>    Display manager: lightdm, sddm, gdm o none
+  --no-wallpaper   No generar un fondo de pantalla por defecto
   --check          Solo diagnóstico: no instala ni modifica nada
+  --no-log         No escribir el fichero de log
+  --log <fichero>  Guardar el log en la ruta indicada
   -h, --help       Mostrar esta ayuda
 
 Ejemplo:
@@ -131,6 +141,32 @@ Ejemplo:
   ./install.sh --dm sddm          # forzar un display manager
   ./install.sh --skip-packages    # solo configs
 ```
+
+### 📄 Log de la instalación
+
+Cada ejecución guarda **todo** lo que imprime el script y todos sus procesos
+hijos (incluidos `pacman`, `makepkg` y `git clone`) en:
+
+```
+~/.cache/dotfiles-2026/install-AAAAMMDD-HHMMSS.log
+```
+
+La salida se ve en pantalla y se guarda a la vez, así que el log sirve para
+auditar la instalación o para depurar algo que falló:
+
+```bash
+# Resumen de problemas de la última instalación
+grep -iE 'error|warn|x \[' ~/.cache/dotfiles-2026/install-*.log | tail -40
+
+# Guardarlo en otra ruta
+./install.sh --log /tmp/mi-instalacion.log
+
+# No generar log
+./install.sh --no-log
+```
+
+El script devuelve **código de salida 1** si al terminar quedan errores o
+componentes sin instalar, para poder encadenarlo en scripts o CI.
 
 ### 🖥️ Display manager: a elegir
 
@@ -164,30 +200,59 @@ sudo ./install.sh --no-dm         # no tocar nada
 ```
 
 El instalador **desactiva automáticamente** el display manager anterior si
-cambias de opción, para que no se peleen por el servidor gráfico.
+cambias de opción, para que no se peleen por el servidor gráfico. Solo usa
+`systemctl disable`, nunca `--now`: si tu display manager actual está en uso,
+`--now` te cerraría la sesión y perderías todo lo que tengas abierto. El
+cambio se aplica al reiniciar.
 
 ### 🔧 Qué hace paso a paso
 
 | Fase | Función | Qué hace |
 |---|---|---|
-| **0/9** | `preflight` | Comprueba Arch, `sudo` y la estructura del repo |
-| **1/9** | `update_system` | `pacman -Syu` |
-| **2/9** | `install_repo_packages` | Instala los paquetes **que existen** en los repos (filtra los que no) |
-| **3c/9** | `setup_display_manager` | Pregunta y activa el display manager que elijas |
-| **3/9** | `install_aur_helpers` | Instala `base-devel`, compila `paru` y `yay` |
-| **3b/9** | `install_aur_packages` | Con el helper: `polybar-contrib`, `arc-gtk-theme`, `nitrogen`… |
-| **4/9** | `create_dirs` | Crea `~/.wallpapers`, `~/.sounds`; **copia los 7 fondos**; rutas XDG en español |
-| **5/9** | `link_dotfiles` | Enlaza 13 carpetas a `~/.config` y 4 archivos a `~`, **con respaldo** |
-| **6/9** | `setup_fonts` | `fc-cache` y verifica CaskaydiaCove; si falta, la **descarga de GitHub** |
-| **7/9** | `setup_gtk_theme` | Comprueba Arc-Dark, Papirus y Adwaita |
-| **8/9** | `setup_shell` | Cambia la shell por defecto a `fish` |
-| — | `setup_services` | Habilita el servicio de audio |
-| **9/9** | `validate_configs` | `sh -n`, `py_compile` y parseo YAML |
-| — | `autotest_configs` | **Ejecuta polybar, picom, rofi, sxhkd, fish y dunst con tus configs** |
-| — | `verify` | Estado final con semáforo y resumen de avisos |
+| — | `setup_logging` | Redirige toda la salida a pantalla **y** a `~/.cache/dotfiles-2026/` |
+| **0/10** | `preflight` | Comprueba Arch, `sudo`, que no se ejecute como root y sincroniza la BD de pacman |
+| **1/10** | `update_system` | `pacman -Syu` |
+| **2/10** | `install_repo_packages` | Instala los paquetes **que existen** en los repos (filtra los que no) |
+| **3/10** | `setup_display_manager` | Pregunta y activa el display manager que elijas |
+| **3b/10** | `install_aur_packages` | `arc-gtk-theme` y `arc-icon-theme` con `makepkg` |
+| **4/10** | `create_dirs` | Crea `~/.wallpapers`, `~/.sounds`; copia los fondos; rutas XDG en español |
+| **5/10** | `link_dotfiles` | Enlaza 12 carpetas a `~/.config` y 3 archivos a `~`, **con respaldo** |
+| **6/10** | `setup_fonts` | `fc-cache` y verifica CaskaydiaCove; si falta, la **descarga de GitHub** |
+| **7/10** | `setup_gtk_theme` | Comprueba Arc-Dark, Papirus y Adwaita |
+| **8/10** | `setup_shell` | Cambia la shell por defecto a `fish` |
+| — | `setup_services` | Habilita el servicio de audio si hay systemd de usuario |
+| **9/10** | `validate_configs` | `sh -n`, `bash -n`, Python en memoria y parseo YAML |
+| — | `autotest_configs` | **Ejecuta polybar, picom, rofi, sxhkd, fish, dunst y alacritty con tus configs** |
+| **10/10** | `verify` | Estado final con semáforo y resumen de errores/avisos |
 
 > Las fases de AUR y display manager se **omiten** si no tienes terminal
 > interactiva o si usas `--no-aur` / `--no-dm`. El script nunca aborta por ello.
+
+<details>
+<summary><b>Por qué no se instalan <code>paru</code> ni <code>yay</code></b></summary>
+
+Los helpers de AUR actuales son binarios que hay que **compilar** (paru en Rust,
+yay en Go), lo que duplica el tiempo de instalación y añade un punto de fallo
+más. Como `base-devel` ya trae `makepkg`, el instalador clona el PKGBUILD del
+paquete y lo compila directamente: mismo resultado, la mitad de tiempo.
+
+Si prefieres usar un helper y lo tienes instalado, el script lo detecta y lo usa.
+
+</details>
+
+<details>
+<summary><b>Por qué no se instala <code>polybar-contrib</code> ni <code>nitrogen</code></b></summary>
+
+- **`polybar-contrib` ya no existe en el AUR.** Además, desde polybar 3.5 los
+  módulos `custom/text`, `custom/script` y `custom/menu` vienen en el paquete
+  oficial, así que la barra de este repo funciona sin nada del AUR.
+  Se puede comprobar con `strings /usr/bin/polybar | grep custom/`.
+- **`nitrogen` no compila.** Su versión del AUR (1.6.1) depende de `gtkmm` y
+  `gtk+-2.0`, y ambos se retiraron de los repos de Arch. No hace falta:
+  `bspwmrc` y `bin/wallpaper.sh` (con `feh`) ya cambian el fondo, y nitrogen solo
+  añadiría una GUI.
+
+</details>
 
 ### Verificar la instalación
 
@@ -204,12 +269,13 @@ Esto ejecuta de verdad cada programa con tu configuración y te dice qué falla:
 ╔══════════════════════════════════════════════════════════╗
 ║  Autotest de configuraciones                         ║
 ╚══════════════════════════════════════════════════════════╝
-  ✔ polybar: config sin errores (no se puede probar sin servidor X)
-  ✔ picom acepta la configuración
+  ✔ polybar acepta la configuración (módulosLeft/derecha leídos)
+  ✔ picom acepta la configuración (validado sin servidor X)
   ✔ rofi acepta el tema rasi
-  ✔ sxhkd acepta los atajos (sin X no se prueban en vivo)
+  ✔ sxhkd acepta los atajos
   ✔ fish carga config.fish sin errores
   ✔ dunst acepta la configuración
+  ✔ alacritty acepta alacritty.toml
   ✔ la fuente de las configs (CaskaydiaCove Nerd Font) está instalada
 ```
 
@@ -232,9 +298,12 @@ for d in alacritty bin bspwm dunst fish gtk-2.0 gtk-3.0 nitrogen \
          pcmanfm picom polybar rofi sxhkd; do
     [ -L ~/.config/$d ] && rm ~/.config/$d
 done
-for f in .xinitrc .xprofile .Xresources .zshrc; do
+for f in .xinitrc .xprofile .Xresources; do
     [ -L ~/$f ] && rm ~/$f
 done
+
+# Quitar la sesión del greeter
+rm -f ~/.local/share/xsessions/dotfiles.desktop
 
 # Restaurar los respaldos que hizo el instalador
 ls ~/.config/*.bak-* ~/*.bak-* 2>/dev/null
@@ -248,13 +317,9 @@ Los respaldos tienen formato `archivo.bak-YYYYMMDD-HHMMSS`.
 
 ```
 dotfiles-2026/
-├── .images/
-│   └── screenshot.png          # Captura del escritorio
-├── .wallpapers/                # 7 fondos de pantalla
-│   ├── bosque.png · earth.png (4K) · fondo.png
-│   ├── windows.png (4K) · macos.jpg · macos-bigsur.jpg · wallpaper.png
 ├── alacritty/
-│   └── alacritty.yml           # Colores Rosé Pine, opacidad, atajos
+│   ├── alacritty.toml          # Config actual (Alacritty 0.13+)
+│   └── alacritty.yml           # Versión antigua, por si usas Alacritty < 0.13
 ├── bin/
 │   ├── spotify_status.py       # Estado de Spotify para polybar
 │   ├── wallpaper.sh            # next / prev / random / list
@@ -269,21 +334,26 @@ dotfiles-2026/
 │   └── functions/
 ├── gtk-2.0/gtkfilechooser.ini
 ├── gtk-3.0/settings.ini        # Arc-Dark + Papirus + cursor Adwaita
-├── nitrogen/                   # Fondos (interfaz gráfica)
+├── nitrogen/                   # Config de nitrogen (opcional)
 ├── pcmanfm/default/pcmanfm.conf
 ├── picom/picom.conf            # Blur, sombras, esquinas redondeadas
 ├── polybar/
 │   ├── config                  # Barra
-│   └── launch.sh               # Lanzador
+│   └── launch.sh               # Lanzador idempotente, con log propio
 ├── rofi/config.rasi            # Launcher
 ├── sxhkd/sxhkdrc               # Atajos de teclado
-├── .xinitrc                    # Arranque de X
-├── .xprofile                   # Perfil para display managers
-├── .Xresources                 # Colores de Xterm (256)
-├── .zshrc                      # Config de zsh (alternativa)
+├── .xinitrc                    # Arranque de la sesión X
+├── .xprofile                   # Variables de entorno de la sesión
+├── .Xresources                 # Fuentes de X, cursor y colores
+├── .gitignore
 ├── install.sh                  # Instalador
 └── README.md
 ```
+
+> Los fondos de pantalla **no** se guardan en el repo (evitar subir PNGs pesados).
+> Si quieres añadir los tuyos, ponlos en `.wallpapers/` dentro del repo: el
+> instalador los copiará a `~/.wallpapers/`. Si no hay ninguno, genera uno
+> Rosé Pine automáticamente con `bin/make_wallpaper.py`.
 
 ### Dónde acaba cada cosa
 
@@ -291,7 +361,8 @@ dotfiles-2026/
 |---|---|
 | `alacritty/`, `bspwm/`, `polybar/`… | `~/.config/<carpeta>/` (symlink) |
 | `bin/` | `~/.config/bin/` (lo necesita polybar) |
-| `.xinitrc`, `.xprofile`, `.Xresources`, `.zshrc` | `~` (symlink) |
+| `.xinitrc`, `.xprofile`, `.Xresources` | `~` (symlink) |
+| (generado) | `~/.local/share/xsessions/dotfiles.desktop` (sesión del greeter) |
 | `.wallpapers/*` | `~/.wallpapers/` (**copia**, puedes añadir los tuyos) |
 
 ---
@@ -303,10 +374,10 @@ dotfiles-2026/
 | Atajo | Acción |
 |---|---|
 | `Super + Enter` | Terminal (Alacritty) |
-| `Super + Shift + Enter` | Terminal flotante |
 | `Super + d` | Lanzador Rofi |
+| `Ctrl + Tab` | Cambio de ventana (Rofi) |
 | `Super + e` | Gestor de archivos |
-| `Super + b` | Navegador |
+| `Super + Shift + r` | Reiniciar bspwm |
 
 ### Ventanas
 
@@ -338,6 +409,9 @@ dotfiles-2026/
 | `Super + Alt + r` | Reiniciar bspwm |
 | `Super + Alt + q` | Cerrar sesión (bspwm) |
 
+> `Ctrl + Tab` y no `Super + Tab`: el segundo entra en conflicto con el atajo de
+> "ir a la última ventana" y sxhkd solo puede cumplir uno de los dos.
+
 ---
 
 ## 📦 Dependencias
@@ -348,7 +422,9 @@ dotfiles-2026/
 # Sesión y WM
 bspwm sxhkd wmname
 xorg-xinit xorg-xsetroot xorg-xrandr xorg-xprop xorg-xwininfo
-xorg-xrdb xorg-setxkbmap xsel xclip xdotool
+xorg-xrdb xorg-setxkbmap xorg-xdpyinfo xorg-xhost xorg-xset
+xsel xclip xdotool
+procps-ng psmisc          # pgrep/pkill y killall, usados por bspwmrc y launch.sh
 lightdm lightdm-gtk-greeter
 
 # Escritorio
@@ -367,41 +443,29 @@ git wget curl unzip tar gzip bzip2 xz zstd base-devel
 
 # Fuentes
 ttf-cascadia-code-nerd ttf-nerd-fonts-symbols
-ttf-nerd-fonts-symbols-mono ttf-font-awesome
-noto-fonts noto-fonts-emoji
+ttf-nerd-fonts-symbols-mono ttf-nerd-fonts-symbols-common
+otf-font-awesome        # el nombre real empieza por otf-, no ttf-
+noto-fonts noto-fonts-emoji noto-fonts-extra
 ```
 
-### Del AUR (los instala el propio script)
+### Del AUR (los instala el propio script con `makepkg`)
 
-| Paquete | Para qué |
-|---|---|
-| `paru` · `yay` | Helpers de AUR (se compilan al vuelo) |
-| `polybar-contrib` | **Imprescindible**: módulos `custom/*` de la barra |
-| `arc-gtk-theme` | Tema GTK Arc-Dark |
-| `arc-icon-theme` | Iconos Arc |
-| `nitrogen` | Gestor de fondos gráfico |
-| `oh-my-fish` | Tema extra de Fish (opcional) |
+| Paquete | Para qué | Dependencias de compilación |
+|---|---|---|
+| `arc-gtk-theme` | Tema GTK Arc-Dark (el que pide `gtk-3.0/settings.ini`) | `meson sassc glib2 gdk-pixbuf2` |
+| `arc-icon-theme` | Iconos Arc (alternativa a Papirus) | `imagemagick` |
 
-> **`polybar-contrib` es el más importante.** Sin él, la barra arranca pero los
-> módulos launcher, powermenu, spotify-status y updates salen vacíos.
->
-> Usa `--no-aur` si prefieres gestionarlos tú a mano.
+> Usa `--no-aur` si prefieres gestionarlos tú a mano. Ninguno es imprescindible:
+> sin Arc-Dark, GTK cae a su tema por defecto sin dar ningún error.
 
 ---
 
 ## 🖼️ Wallpapers
 
-El repo incluye **7 fondos** que el instalador copia a `~/.wallpapers/`:
-
-| Archivo | Resolución | Tamaño |
-|---|---|---|
-| `bosque.png` | — | 337 KB |
-| `earth.png` | 3840×2160 (4K) | 8.2 MB |
-| `fondo.png` | 6024×3401 | 1.1 MB |
-| `windows.png` | 3840×2160 (4K) | 3.8 MB |
-| `macos.jpg` | — | 4.4 MB |
-| `macos-bigsur.jpg` | — | 3.2 MB |
-| `wallpaper.png` | — | 477 KB |
+El instalador copia a `~/.wallpapers/` los fondos que encuentre en
+`.wallpapers/` dentro del repo. Si el repo no trae ninguno (es lo normal, para no
+subir PNGs pesados a git), **genera un degradado Rosé Pine** con
+`bin/make_wallpaper.py`. Para desactivarlo: `--no-wallpaper`.
 
 Añade los tuyos a `~/.wallpapers/` y se detectan solos. El orden de arranque es:
 
@@ -430,7 +494,7 @@ python3 ~/.config/bin/make_wallpaper.py ~/Pictures/rose.png 2560 1440
 | Quiero cambiar… | Archivo |
 |---|---|
 | Colores de la barra | `polybar/config` → `[colors]` |
-| Colores de la terminal | `alacritty/alacritty.yml` → `colors:` |
+| Colores de la terminal | `alacritty/alacritty.toml` → `[colors]` |
 | Colores de rofi | `rofi/config.rasi` |
 | Bordes de ventana | `bspwm/bspwmrc` → `# BSPWM config` |
 | Atajos de teclado | `sxhkd/sxhkdrc` |
@@ -469,11 +533,16 @@ todos comparten la misma paleta. Si cambias de variante de Rosé Pine —main,
 <summary><b>La barra no aparece</b></summary>
 
 ```bash
-~/.config/polybar/launch.sh          # relance manual
-tail -20 /tmp/polybar-bar.log        # ver el error
+~/.config/polybar/launch.sh                    # relance manual
+tail -20 ~/.cache/polybar-bar.log              # ver el error
 ```
 
-Causa más común: falta `polybar-contrib` para los módulos personalizados.
+Si el log dice `Unknown module type: custom/...`, tu polybar es anterior a la
+3.5 y no trae los módulos `custom/*`. Actualiza el paquete oficial:
+
+```bash
+sudo pacman -Syu polybar
+```
 
 </details>
 
@@ -483,7 +552,7 @@ Causa más común: falta `polybar-contrib` para los módulos personalizados.
 Falta la fuente de símbolos:
 
 ```bash
-sudo pacman -S ttf-nerd-fonts-symbols ttf-font-awesome
+sudo pacman -S ttf-nerd-fonts-symbols otf-font-awesome
 fc-cache -f
 ```
 
@@ -498,8 +567,9 @@ Comprueba la config:
 ./install.sh --check
 ```
 
-Lo más común es un error de YAML en `alacritty.yml`. El autotest lo detecta y
-te dice la línea exacta.
+Alacritty 0.13+ usa **TOML**, no YAML: si editas `alacritty.yml` no se te va a
+aplicar nada. El archivo que se lee es `alacritty.toml`. Si vienes del YAML,
+puedes migrarlo con `alacritty migrate`.
 
 </details>
 
@@ -515,10 +585,13 @@ systemctl status lightdm
 Si no hay ninguno, actívalo:
 
 ```bash
-sudo ./install.sh --dm lightdm
+./install.sh --dm lightdm
+sudo systemctl enable lightdm
 ```
 
 Si no quieres display manager, entra por consola con `xinit ~/.xinitrc`.
+El instalador también crea `~/.local/share/xsessions/dotfiles.desktop`, que es
+lo que hace que esta sesión aparezca en la lista del greeter.
 
 </details>
 
@@ -529,10 +602,10 @@ Si no quieres display manager, entra por consola con `xinit ~/.xinitrc`.
 chmod +x ~/.config/bspwm/bspwmrc
 ```
 
-Además, revisa el log de bspwm:
+Además, revisa el log de la instalación:
 
 ```bash
-cat /tmp/bspwm.log
+grep -iE 'error|warn' ~/.cache/dotfiles-2026/install-*.log | tail
 ```
 
 </details>

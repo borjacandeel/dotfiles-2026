@@ -1,5 +1,4 @@
 #!/bin/sh
-
 # ============================================
 #  bspwmrc - BSPWM + SXHKD + Polybar (Rosé Pine)
 #  Autor: Borja Candel
@@ -37,14 +36,14 @@ set_wallpaper() {
 # Atajos de teclado
 run_once sxhkd sxhkd
 
+# Notificaciones antes que el resto: rofi y los diálogos las necesitan
+if have dunst; then
+    run_once dunst dunst
+fi
+
 # Nombre del gestor de ventanas (para que las barras lo lean bien)
 if have wmname; then
     run_once wmname wmname LG3D
-fi
-
-# Notificaciones
-if have dunst; then
-    run_once dunst dunst
 fi
 
 # Compositor
@@ -66,6 +65,8 @@ if [ -f "$HOME/.sounds/startup.mp3" ] && have play; then
 fi
 
 # Barra
+# launch.sh ya se encarga de matar cualquier polybar anterior, así que
+# aquí no hace falta comprobar si ya corre.
 if [ -x "$HOME/.config/polybar/launch.sh" ]; then
     run_once polybar "$HOME/.config/polybar/launch.sh"
 fi
@@ -80,7 +81,9 @@ have nm-applet  && run_once nm-applet  nm-applet
 xsetroot -cursor_name left_ptr 2>/dev/null
 
 # Monitor setup
-bspc monitor -d I II III IV V VI VII VIII IX X
+# 'bspc monitor -d' con más nombres que monitores connected los deja
+# como espacios de trabajo vacíos, que es justo lo que queremos.
+bspc monitor -d I II III IV V VI VII VIII IX X 2>/dev/null
 
 # BSPWM config
 bspc config border_width         2

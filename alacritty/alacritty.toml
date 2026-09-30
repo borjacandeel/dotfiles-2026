@@ -1,0 +1,202 @@
+# ============================================
+#  alacritty.toml - Configuración de Alacritty
+#  Dotfiles 2026 · Rosé Pine
+#  Autor: Borja Candel
+# ============================================
+#
+#  Alacritty 0.13+ usa TOML (el YAML quedó deprecado en 0.17).
+#  Este archivo se genera/mantiene con:  alacritty migrate
+#  La versión antigua en YAML sigue en alacritty.yml por si usas
+#  una versión antigua de Alacritty; alacritty carga el TOML primero.
+
+# --------------------------------------------------------------------
+# Ventana
+# --------------------------------------------------------------------
+[window]
+opacity = 0.95
+decorations = "full"
+startup_mode = "Windowed"
+dynamic_padding = true
+
+[window.dimensions]
+columns = 80
+lines = 24
+
+[window.padding]
+x = 8
+y = 8
+
+# --------------------------------------------------------------------
+# Scrolling
+# --------------------------------------------------------------------
+[scrolling]
+history = 10000
+multiplier = 3
+
+# --------------------------------------------------------------------
+# Fuente
+# --------------------------------------------------------------------
+[font]
+size = 11.0
+
+[font.normal]
+family = "CaskaydiaCove Nerd Font"
+style = "Regular"
+
+[font.bold]
+family = "CaskaydiaCove Nerd Font"
+style = "Bold"
+
+[font.italic]
+family = "CaskaydiaCove Nerd Font"
+style = "Italic"
+
+[font.offset]
+x = 0
+y = 0
+
+# --------------------------------------------------------------------
+# Colores · Rosé Pine
+# --------------------------------------------------------------------
+[colors]
+draw_bold_text_with_bright_colors = true
+
+[colors.primary]
+background = "#191724"   # base
+foreground = "#E0DEF4"   # text
+
+[colors.cursor]
+text = "#E0DEF4"
+cursor = "#524F67"
+
+[colors.vi_mode_cursor]
+text = "#E0DEF4"
+cursor = "#524F67"
+
+[colors.selection]
+text = "#E0DEF4"
+background = "#403D52"
+
+[colors.normal]
+black = "#26233A"
+red = "#EB6F92"      # love
+green = "#31748F"    # pine
+yellow = "#F6C177"   # gold
+blue = "#9CCFD8"     # foam
+magenta = "#C4A7E7"  # iris
+cyan = "#EBBCBA"     # rose
+white = "#E0DEF4"    # text
+
+[colors.bright]
+black = "#6E6A86"     # muted
+red = "#EB6F92"
+green = "#31748F"
+yellow = "#F6C177"
+blue = "#9CCFD8"
+magenta = "#C4A7E7"
+cyan = "#EBBCBA"
+white = "#E0DEF4"
+
+[[colors.indexed_colors]]
+index = 16
+color = "#F6C177"
+
+[[colors.indexed_colors]]
+index = 17
+color = "#EB6F92"
+
+# --------------------------------------------------------------------
+# Campana (sin sonido)
+# --------------------------------------------------------------------
+[bell]
+animation = "EaseOutExpo"
+duration = 0
+color = "#E0DEF4"
+
+# --------------------------------------------------------------------
+# Ratón
+# --------------------------------------------------------------------
+[mouse]
+hide_when_typing = true
+
+[[mouse.bindings]]
+mouse = "Middle"
+action = "PasteSelection"
+
+# --------------------------------------------------------------------
+# Atajos de teclado
+# --------------------------------------------------------------------
+[[keyboard.bindings]]
+key = "V"
+mods = "Control|Shift"
+action = "Paste"
+
+[[keyboard.bindings]]
+key = "C"
+mods = "Control|Shift"
+action = "Copy"
+
+[[keyboard.bindings]]
+key = "Insert"
+mods = "Shift"
+action = "PasteSelection"
+
+[[keyboard.bindings]]
+key = "Key0"
+mods = "Control"
+action = "ResetFontSize"
+
+[[keyboard.bindings]]
+key = "Equals"
+mods = "Control"
+action = "IncreaseFontSize"
+
+[[keyboard.bindings]]
+key = "Plus"
+mods = "Control"
+action = "IncreaseFontSize"
+
+[[keyboard.bindings]]
+key = "Minus"
+mods = "Control"
+action = "DecreaseFontSize"
+
+[[keyboard.bindings]]
+key = "F11"
+mods = "None"
+action = "ToggleFullscreen"
+
+[[keyboard.bindings]]
+key = "Paste"
+mods = "None"
+action = "Paste"
+
+[[keyboard.bindings]]
+key = "Copy"
+mods = "None"
+action = "Copy"
+
+[[keyboard.bindings]]
+key = "L"
+mods = "Control"
+chars = "\f"
+
+[[keyboard.bindings]]
+key = "PageUp"
+mods = "None"
+action = "ScrollPageUp"
+
+[[keyboard.bindings]]
+key = "PageDown"
+mods = "None"
+action = "ScrollPageDown"
+
+[[keyboard.bindings]]
+key = "Home"
+mods = "Shift"
+action = "ScrollToTop"
+
+[[keyboard.bindings]]
+key = "End"
+mods = "Shift"
+action = "ScrollToBottom"
