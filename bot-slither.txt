@@ -1,0 +1,1485 @@
+/*
+The MIT License (MIT)
+ Copyright (c) 2016 Jesse Miller <jmiller@jmiller.com>
+ Copyright (c) 2016 Alexey Korepanov <kaikaikai@yandex.ru>
+ Copyright (c) 2016 Ermiya Eskandary & Théophile Cailliau and other contributors
+ https://jmiller.mit-license.org/
+*/
+// ==UserScript==
+// @name         Slither.io Bot Championship Edition
+// @namespace    https://github.com/j-c-m/Slither.io-bot
+// @version      5.0.0
+// @description  Bot para slither.io con planificador de trayectorias, predicción de rivales y caza
+// @author       Jesse Miller
+// @match        *://slither.io/*
+// @match        *://slither.com/*
+// @match        *://slither.com/io/*
+// @run-at       document-idle
+// @grant        none
+// @sandbox      raw
+// @inject-into  page
+// ==/UserScript==
+
+// @sandbox raw (Tampermonkey) e @inject-into page (Violentmonkey) obligan a que el
+// script se ejecute en el contexto de la página; si no, no puede ver las variables del juego.
+
+var SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info.script) ?
+    GM_info.script.version : '5.0.0';
+
+window.log = function () {
+    if (window.logDebugging) {
+        console.log.apply(console, arguments);
+    }
+};
+
+// Devuelve v si es un número razonable; si no, el valor por defecto
+function numOr(v, def, lo, hi) {
+    return (typeof v === 'number' && isFinite(v) && v >= lo && v <= hi) ? v : def;
+}
+
+// ===========================================================================
+// CAPA DE COMPATIBILIDAD CON EL JUEGO
+// La versión actual de slither.io renombró snake -> slither y snakes -> slithers.
+// ===========================================================================
+var game = window.botGame = {
+    me: null,
+    snakes: [],
+
+    refresh: function () {
+        game.me = window.slither || window.snake || null;
+        game.snakes = window.slithers || window.snakes || [];
+        return game.me;
+    },
+
+    isPlaying: function () {
+        var me = game.me;
+        return !!(me && typeof me.xx === 'number' && !me.dead);
+    },
+
+    // Dirección real de movimiento (ang); ehang solo como respaldo
+    angle: function (s) {
+        if (typeof s.ang === 'number') return s.ang;
+        if (typeof s.ehang === 'number') return s.ehang;
+        return 0;
+    },
+
+    // Las serpientes que acaban de aparecer (semitransparentes) ya son sólidas
+    isAlive: function (s) {
+        return !!(s && !s.dead && typeof s.xx === 'number');
+    },
+
+    foodSize: function (f) {
+        if (typeof f.sz === 'number') return f.sz;
+        if (typeof f.gr === 'number') return f.gr;
+        return 1;
+    },
+
+    // Grosor relativo (1..6), igual que en el juego
+    scale: function (s) {
+        return numOr(s && s.sc, 1, 0.5, 6);
+    },
+
+    radius: function (s) {
+        return game.scale(s) * 14.5;
+    },
+
+    normalSp: function (s) {
+        return numOr(window.nsp1, 5.39, 1, 20) + numOr(window.nsp2, 0.4, 0, 5) * game.scale(s);
+    },
+
+    boostSp: function () {
+        return numOr(window.nsp3, 14, 5, 40);
+    },
+
+    // Velocidad de giro en rad/s (fórmula del juego: mamu · scang · spang por tick de 8 ms)
+    turnRate: function (s, sp) {
+        var sc = game.scale(s);
+        var scang = 0.13 + 0.87 * Math.pow((7 - sc) / 6, 2);
+        var spang = Math.min(1, sp / numOr(window.spangdv, 4.8, 1, 20));
+        return numOr(window.mamu, 0.033, 0.005, 0.2) * 125 * scang * spang;
+    },
+
+    length: function (s) {
+        if (!s || !window.fpsls || !window.fmlts || s.sct === undefined) return 0;
+        var l = Math.floor(15 * (window.fpsls[s.sct] + s.fam / window.fmlts[s.sct] - 1) - 5);
+        return (isFinite(l) && l > 0) ? l : 0;
+    },
+
+    // Escribe botGame.diagnose() en la consola (F12) durante una partida
+    diagnose: function () {
+        var describe = function (v) {
+            if (v === undefined) return '(NO EXISTE)';
+            if (v === null) return 'null';
+            if (typeof v === 'function') return 'función';
+            if (Array.isArray(v)) return 'array[' + v.length + ']';
+            if (typeof v === 'number') return 'número (' + Math.round(v * 1000) / 1000 + ')';
+            return typeof v;
+        };
+        var report = {};
+        ['slither', 'snake', 'slithers', 'snakes', 'foods', 'foods_c', 'preys', 'grd', 'gsc',
+            'xm', 'ym', 'lsxm', 'lsym', 'view_xx', 'view_yy', 'mc', 'mww2', 'mhh2',
+            'setAcceleration', 'connect', 'redraw', 'fpsls', 'fmlts', 'rank', 'snake_count',
+            'nsp1', 'nsp2', 'nsp3', 'mamu', 'spangdv'
+        ].forEach(function (n) {
+            report[n] = describe(window[n]);
+        });
+        var me = window.slither || window.snake;
+        if (me) {
+            ['xx', 'yy', 'ang', 'ehang', 'wang', 'sp', 'sc', 'sct', 'fam', 'pts', 'id',
+                'alive_amt', 'dead'
+            ].forEach(function (k) {
+                report['serpiente.' + k] = describe(me[k]);
+            });
+        }
+        report['bucle del bot'] = userInterface.loopMode;
+        report['ms por plan'] = Math.round(bot.planMs * 100) / 100;
+        report['último error'] = userInterface.lastError || '(ninguno)';
+        console.table(report);
+        return report;
+    }
+};
+
+// ===========================================================================
+// UTILIDADES DE RATÓN, ZOOM Y DIBUJO
+// ===========================================================================
+var canvas = window.canvas = (function (window) {
+    return {
+        // Simula mover el ratón (coordenadas relativas al centro de la pantalla)
+        setMouseCoordinates: function (point) {
+            if (!isFinite(point.x) || !isFinite(point.y)) return;
+            window.xm = point.x;
+            window.ym = point.y;
+            // Obliga al juego a enviar la nueva dirección al servidor
+            if ('lsxm' in window) {
+                window.lsxm = -point.x;
+                window.lsym = -point.y;
+            }
+        },
+
+        getContext: function () {
+            var mc = window.mc;
+            if (!mc || typeof mc.getContext !== 'function') return null;
+            return mc.getContext('2d');
+        },
+
+        mapToCanvas: function (point) {
+            var mc = window.mc;
+            var cx = typeof window.mww2 === 'number' ? window.mww2 : (mc ? mc.width / 2 : 0);
+            var cy = typeof window.mhh2 === 'number' ? window.mhh2 : (mc ? mc.height / 2 : 0);
+            var g = window.gsc || 1;
+            return {
+                x: cx + (point.x - window.view_xx) * g,
+                y: cy + (point.y - window.view_yy) * g
+            };
+        },
+
+        setZoom: function (e) {
+            if (window.gsc) {
+                var dir = 0;
+                if (e.deltaY !== undefined) {
+                    dir = Math.sign(e.deltaY);
+                } else if (e.wheelDelta) {
+                    dir = -Math.sign(e.wheelDelta);
+                } else if (e.detail) {
+                    dir = Math.sign(e.detail);
+                }
+                window.gsc *= Math.pow(0.9, dir);
+                window.desired_gsc = window.gsc;
+            }
+        },
+
+        resetZoom: function () {
+            window.gsc = 0.9;
+            window.desired_gsc = 0.9;
+        },
+
+        maintainZoom: function () {
+            if (window.desired_gsc !== undefined) {
+                window.gsc = window.desired_gsc;
+            }
+        },
+
+        // Círculo en coordenadas del mapa
+        drawCircle: function (x, y, r, color, fill, alpha) {
+            var ctx = canvas.getContext();
+            if (!ctx) return;
+            var c = canvas.mapToCanvas({ x: x, y: y });
+            ctx.save();
+            ctx.globalAlpha = alpha === undefined ? 1 : alpha;
+            ctx.beginPath();
+            ctx.arc(c.x, c.y, Math.max(1, r * (window.gsc || 1)), 0, Math.PI * 2);
+            if (fill) {
+                ctx.fillStyle = color;
+                ctx.fill();
+            } else {
+                ctx.strokeStyle = color;
+                ctx.lineWidth = 2;
+                ctx.stroke();
+            }
+            ctx.restore();
+        },
+
+        drawLine: function (p1, p2, color, width) {
+            canvas.drawPolyline([p1, p2], color, width);
+        },
+
+        drawPolyline: function (pts, color, width) {
+            var ctx = canvas.getContext();
+            if (!ctx || !pts || pts.length < 2) return;
+            ctx.save();
+            ctx.beginPath();
+            ctx.lineWidth = (width || 2) * (window.gsc || 1);
+            ctx.strokeStyle = color;
+            var p0 = canvas.mapToCanvas(pts[0]);
+            ctx.moveTo(p0.x, p0.y);
+            for (var i = 1; i < pts.length; i++) {
+                var p = canvas.mapToCanvas(pts[i]);
+                ctx.lineTo(p.x, p.y);
+            }
+            ctx.stroke();
+            ctx.restore();
+        }
+    };
+})(window);
+
+// ===========================================================================
+// LÓGICA DEL BOT: PLANIFICADOR DE TRAYECTORIAS
+// ---------------------------------------------------------------------------
+// En cada plan (unas 40 veces por segundo):
+//  1. Mete los cuerpos rivales cercanos en una rejilla espacial y en un "radar"
+//     de 48 sectores (distancia libre en cada dirección).
+//  2. Para cada cabeza rival calcula la zona que puede alcanzar según su
+//     velocidad y su capacidad de giro (ahí es donde te cortan el paso).
+//  3. Simula ~30 rumbos (y sus versiones con turbo) respetando el giro real
+//     de tu serpiente y el retraso de red.
+//  4. Puntúa cada trayectoria: choque, cercanía a obstáculos, comida recogida,
+//     comida lejana, espacio libre y oportunidades de corte. La seguridad pesa
+//     siempre muchísimo más que comer o cazar.
+// ===========================================================================
+var bot = window.bot = (function (window) {
+    var TAU = Math.PI * 2;
+    var SPU = 31.25;          // unidades de mapa por segundo por cada unidad de "sp"
+    var SECTORS = 48;
+    var SEC_W = TAU / SECTORS;
+    var GRID_KEY = 8192;
+    // Desvíos (rad) respecto al rumbo actual que se evalúan en cada plan
+    var OFFSETS = [0, 0.08, -0.08, 0.17, -0.17, 0.3, -0.3, 0.45, -0.45, 0.62, -0.62,
+        0.8, -0.8, 1.0, -1.0, 1.25, -1.25, 1.5, -1.5, 1.8, -1.8, 2.15, -2.15,
+        2.5, -2.5, 2.85, -2.85];
+
+    var ray = new Float64Array(SECTORS);
+    var farFood = new Float64Array(SECTORS);
+    var farSm = new Float64Array(SECTORS);
+
+    // Diferencia angular con signo en (-π, π]
+    function angDiff(from, to) {
+        var d = (to - from) % TAU;
+        if (d > Math.PI) d -= TAU;
+        else if (d <= -Math.PI) d += TAU;
+        return d;
+    }
+
+    function sectorOf(a) {
+        var j = Math.round(a / SEC_W) % SECTORS;
+        return j < 0 ? j + SECTORS : j;
+    }
+
+    // Rejilla espacial para buscar obstáculos/comida cercanos rápidamente
+    function Grid(cell) {
+        this.cell = cell;
+        this.map = new Map();
+    }
+    Grid.prototype.add = function (x, y, idx) {
+        var k = Math.floor(x / this.cell) * GRID_KEY + Math.floor(y / this.cell);
+        var a = this.map.get(k);
+        if (a === undefined) {
+            a = [];
+            this.map.set(k, a);
+        }
+        a.push(idx);
+    };
+
+    return {
+        isBotRunning: false,
+        isBotEnabled: true,
+        mode: '-',
+        scores: [],
+        defaultAccel: 0,
+        wantAccel: 0,
+        lastAccel: -1,
+        lastAccelTime: 0,
+        snakeLength: 0,
+        lastLength: 0,
+        targetAngle: undefined,
+        lastTarget: undefined,
+        lastPlan: 0,
+        planMs: 0,
+        enclosure: 0,
+        nearHeads: 0,
+        debug: null,
+        MID_X: 0,
+        MID_Y: 0,
+        MAP_R: Infinity,
+
+        opt: {
+            planInterval: 25,       // ms mínimos entre planes
+            stepsPerSecond: 14,     // resolución de la simulación
+            minHorizon: 1.2,        // s simulados (serpiente pequeña, gira rápido)
+            maxHorizon: 3.0,        // s simulados (serpiente enorme, gira despacio)
+            latency: 0.08,          // s que tarda en aplicarse una orden de giro
+            senseRange: 2000,       // radio del radar
+            hardMargin: 8,          // margen extra de contacto (teclas A/S)
+            softMargin: 1.0,        // distancia "cómoda" en anchos de serpiente
+            headSlack: 0.12,        // ventaja mínima (s) exigida frente a una cabeza rival
+            enemySpeedFactor: 1.3,  // velocidad supuesta de un rival que aún no acelera
+            turnFactor: 0.6,        // cuánto le cuesta a un rival girar hacia ti
+            encircleRange: 0.35,    // fracción del radar que cuenta como "cerca"
+            encircleThreshold: 0.7, // fracción de sectores bloqueados para modo "rodeado"
+            eatRadius: 0.9,         // radio de recogida en anchos de serpiente
+            foodTau: 0.8,           // descuento temporal de la comida (s)
+            foodRange: 1800,        // distancia máxima a la que atrae la comida
+            hunt: true,             // intentar cortar el paso a rivales (tecla K)
+            killSlack: 0.1,         // s de ventaja para considerar un corte
+            autoBoost: true,        // turbo automático (tecla B)
+            boostMinLength: 200,    // longitud mínima para usar turbo por comida o caza
+            foodBoostMin: 80,       // comida en la trayectoria que justifica turbo
+            w: {
+                near: 3,      // penalización por pasar cerca de obstáculos
+                food: 3,      // comida recogida en la trayectoria
+                far: 1.5,     // comida lejana en esa dirección
+                open: 2,      // espacio libre en esa dirección
+                kill: 4,      // cortar el paso a un rival
+                turn: 0.4,    // coste de girar mucho
+                keep: 0.25,   // bonus por mantener la decisión (evita zigzag)
+                center: 1,    // alejarse del borde del mapa
+                boost: 1.5,   // coste del turbo
+                boostBad: 4   // coste extra del turbo sin motivo
+            }
+        },
+
+        diagnose: function () {
+            return game.diagnose();
+        },
+
+        resetPlan: function () {
+            bot.targetAngle = undefined;
+            bot.lastTarget = undefined;
+            bot.debug = null;
+            bot.wantAccel = 0;
+            bot.mode = '-';
+            window.goalCoordinates = undefined;
+        },
+
+        // Solo envía la aceleración cuando cambia (y la reenvía cada 250 ms por si acaso)
+        setAccel: function (v) {
+            var now = Date.now();
+            if (v !== bot.lastAccel || now - bot.lastAccelTime > 250) {
+                if (typeof window.setAcceleration === 'function') {
+                    window.setAcceleration(v);
+                }
+                bot.lastAccel = v;
+                bot.lastAccelTime = now;
+            }
+        },
+
+        quickRespawn: function () {
+            window.dead_mtm = 0;
+            window.login_fr = 0;
+            bot.isBotRunning = false;
+            window.forcing = true;
+            bot.connect();
+            window.forcing = false;
+        },
+
+        connect: function () {
+            if (window.force_ip && window.force_port &&
+                typeof window.forceServer === 'function') {
+                window.forceServer(window.force_ip, window.force_port);
+            }
+            if (typeof window.connect === 'function') {
+                window.connect();
+            }
+        },
+
+        updateLength: function () {
+            var l = game.length(game.me);
+            bot.snakeLength = l;
+            if (l > 0) bot.lastLength = l;
+        },
+
+        // Apunta el "ratón" en la dirección elegida (se repite cada frame)
+        steer: function () {
+            var me = game.me;
+            var a = bot.targetAngle;
+            if (!me || a === undefined) return;
+            canvas.setMouseCoordinates({ x: Math.cos(a) * 250, y: Math.sin(a) * 250 });
+            window.goalCoordinates = {
+                x: me.xx + Math.cos(a) * 400,
+                y: me.yy + Math.sin(a) * 400
+            };
+        },
+
+        // Simula una trayectoria hacia "target" y devuelve sus métricas
+        simulate: function (ctx, target, boost, cid, record) {
+            var o = bot.opt;
+            var v = boost ? ctx.vB : ctx.vN;
+            var w = boost ? ctx.wB : ctx.wN;
+            var steps = ctx.steps, dt = ctx.horizon / steps;
+            var x = ctx.hx, y = ctx.hy, h = ctx.ang;
+            var rMe = ctx.rMe, hardM = ctx.hardM, softAbs = ctx.softAbs;
+            var tc = Infinity, minClear = Infinity, food = 0, foodSz = 0, kill = 0;
+            var path = record ? [{ x: x, y: y }] : null;
+            var cell = ctx.grid.cell, gmap = ctx.grid.map, rq = ctx.rq;
+            var obsX = ctx.obsX, obsY = ctx.obsY, obsR = ctx.obsR;
+            var heads = ctx.heads, headStamp = ctx.headStamp, nh = heads.length;
+            var fcell = ctx.fgrid.cell, fmap = ctx.fgrid.map;
+            var fX = ctx.fX, fY = ctx.fY, fV = ctx.fV, fS = ctx.fS, foodStamp = ctx.foodStamp;
+            var eatR = ctx.eatR, eatR2 = eatR * eatR;
+            var maxTurn = w * dt, stepLen = v * dt;
+            var clear, hit, k, n, e;
+
+            for (k = 1; k <= steps; k++) {
+                var t = k * dt;
+                // Durante la latencia la serpiente sigue con la orden anterior
+                var dA = angDiff(h, t <= o.latency ? ctx.prevTarget : target);
+                h += dA > maxTurn ? maxTurn : (dA < -maxTurn ? -maxTurn : dA);
+                x += Math.cos(h) * stepLen;
+                y += Math.sin(h) * stepLen;
+                if (record) path.push({ x: x, y: y });
+
+                // Borde del mapa
+                var bx = x - ctx.midX, by = y - ctx.midY;
+                clear = ctx.mapR - Math.sqrt(bx * bx + by * by) - rMe - hardM;
+                if (clear < minClear) minClear = clear;
+                if (clear < 0) { tc = t; break; }
+
+                // Cuerpos rivales
+                hit = false;
+                var cx0 = Math.floor((x - rq) / cell), cx1 = Math.floor((x + rq) / cell);
+                var cy0 = Math.floor((y - rq) / cell), cy1 = Math.floor((y + rq) / cell);
+                scan:
+                for (var cx = cx0; cx <= cx1; cx++) {
+                    for (var cy = cy0; cy <= cy1; cy++) {
+                        var list = gmap.get(cx * GRID_KEY + cy);
+                        if (list === undefined) continue;
+                        for (n = 0; n < list.length; n++) {
+                            var oi = list[n];
+                            var ox = obsX[oi] - x, oy = obsY[oi] - y;
+                            var lim = obsR[oi] + rMe + hardM;
+                            var limSoft = lim + softAbs;
+                            var od2 = ox * ox + oy * oy;
+                            if (od2 > limSoft * limSoft) continue;
+                            clear = Math.sqrt(od2) - lim;
+                            if (clear < minClear) minClear = clear;
+                            if (clear < 0) { hit = true; break scan; }
+                        }
+                    }
+                }
+                if (hit) { tc = t; break; }
+
+                // Cabezas rivales: zona que pueden haber recorrido (y convertido en cuerpo)
+                for (e = 0; e < nh; e++) {
+                    var H = heads[e];
+                    var rx = x - H.x, ry = y - H.y;
+                    var hd2 = rx * rx + ry * ry;
+                    if (hd2 > H.maxReach2) continue;
+                    var hd = Math.sqrt(hd2) + 1e-6;
+                    var along = rx * H.ux + ry * H.uy;
+                    var beta = Math.acos(Math.max(-1, Math.min(1, along / hd)));
+                    var reach = H.va * Math.max(0, t + o.headSlack - o.turnFactor * beta / H.w);
+                    clear = hd - H.R - reach;
+                    if (clear < minClear) minClear = clear;
+                    if (clear < 0) { hit = true; break; }
+
+                    // Caza: pasamos por delante de su cabeza antes que ella y demasiado
+                    // cerca para que pueda esquivar nuestro cuerpo
+                    if (ctx.hunt && headStamp[e] !== cid && along > 0 && along < H.killReach &&
+                        Math.abs(rx * H.uy - ry * H.ux) < H.r + rMe &&
+                        t < along / H.va - o.killSlack) {
+                        headStamp[e] = cid;
+                        kill += H.killValue;
+                    }
+                }
+                if (hit) { tc = t; break; }
+
+                // Comida recogida en este paso
+                var decay = Math.exp(-t / o.foodTau);
+                var fx0 = Math.floor((x - eatR) / fcell), fx1 = Math.floor((x + eatR) / fcell);
+                var fy0 = Math.floor((y - eatR) / fcell), fy1 = Math.floor((y + eatR) / fcell);
+                for (var gx = fx0; gx <= fx1; gx++) {
+                    for (var gy = fy0; gy <= fy1; gy++) {
+                        var fl = fmap.get(gx * GRID_KEY + gy);
+                        if (fl === undefined) continue;
+                        for (n = 0; n < fl.length; n++) {
+                            var fi = fl[n];
+                            if (foodStamp[fi] === cid) continue;
+                            var ex = fX[fi] - x, ey = fY[fi] - y;
+                            if (ex * ex + ey * ey < eatR2) {
+                                foodStamp[fi] = cid;
+                                food += fV[fi] * decay;
+                                foodSz += fS[fi];
+                            }
+                        }
+                    }
+                }
+            }
+
+            return {
+                target: target, boost: boost, tc: tc, minClear: minClear,
+                food: food, foodSz: foodSz, kill: kill,
+                endH: h, endX: x, endY: y, path: path
+            };
+        },
+
+        plan: function () {
+            var t0 = performance.now();
+            var o = bot.opt, W = o.w;
+            var me = game.me;
+            var hx = me.xx, hy = me.yy;
+            var cur = game.angle(me);
+            var rMe = game.radius(me);
+            var width = rMe * 2;
+            var spN = game.normalSp(me);
+            var spB = Math.max(spN, game.boostSp());
+            var vN = spN * SPU, vB = spB * SPU;
+            var wN = Math.max(0.2, game.turnRate(me, spN));
+            var wB = Math.max(0.2, game.turnRate(me, spB));
+            var hardM = o.hardMargin;
+            var softAbs = Math.min(120, o.softMargin * width + 30);
+            var sense = o.senseRange, sense2 = sense * sense;
+            var i, j, k;
+
+            // Horizonte adaptado al giro: lo que tarda en girar 90° y algo más
+            var horizon = Math.max(o.minHorizon,
+                Math.min(o.maxHorizon, (Math.PI / 2) / wN + 0.6));
+            var steps = Math.max(8, Math.round(horizon * o.stepsPerSecond));
+            var simReach = vB * horizon + 300, sim2 = simReach * simReach;
+
+            // ---------- 1. Obstáculos ----------
+            ray.fill(sense);
+            var obsX = [], obsY = [], obsR = [];
+            var grid = new Grid(128);
+            var maxObsR = 0;
+            var heads = [];
+            var nearHeads = 0;
+
+            var addRay = function (dx, dy, d, R) {
+                var free = d - R;
+                if (free < 0) free = 0;
+                var th = Math.atan2(dy, dx);
+                var hw = d > R ? Math.asin(R / d) : Math.PI / 2;
+                var j0 = Math.round((th - hw) / SEC_W), j1 = Math.round((th + hw) / SEC_W);
+                for (var jj = j0; jj <= j1; jj++) {
+                    var js = ((jj % SECTORS) + SECTORS) % SECTORS;
+                    if (ray[js] > free) ray[js] = free;
+                }
+            };
+
+            var snakes = game.snakes;
+            for (i = 0; i < snakes.length; i++) {
+                var s = snakes[i];
+                if (s === me || !game.isAlive(s) || (s.id !== undefined && s.id === me.id)) continue;
+                var rS = game.radius(s);
+                var R = rS + rMe + hardM;
+
+                var pts = s.pts;
+                if (pts) {
+                    for (var p = 0, lp = pts.length; p < lp; p++) {
+                        var pt = pts[p];
+                        if (!pt || pt.dying || typeof pt.xx !== 'number') continue;
+                        var dx = pt.xx - hx, dy = pt.yy - hy;
+                        var d2 = dx * dx + dy * dy;
+                        if (d2 > sense2) continue;
+                        addRay(dx, dy, Math.sqrt(d2), R);
+                        if (d2 < sim2) {
+                            grid.add(pt.xx, pt.yy, obsX.length);
+                            obsX.push(pt.xx);
+                            obsY.push(pt.yy);
+                            obsR.push(rS);
+                            if (rS > maxObsR) maxObsR = rS;
+                        }
+                    }
+                }
+
+                // Cabeza
+                var hdx = s.xx - hx, hdy = s.yy - hy;
+                var hd2 = hdx * hdx + hdy * hdy;
+                if (hd2 > sense2) continue;
+                var hd = Math.sqrt(hd2);
+                var sa = game.angle(s);
+                var spNs = game.normalSp(s);
+                var spS = numOr(s.sp, spNs, 0.5, 60);
+                var boosting = spS > (spNs + game.boostSp()) / 2;
+                var v = spS * SPU;
+                var va = boosting ? v * 1.05 : v * o.enemySpeedFactor;
+                var ws = Math.max(0.2, game.turnRate(s, spS));
+                var maxReach = va * (horizon + o.headSlack) + R + 60;
+                heads.push({
+                    x: s.xx, y: s.yy,
+                    ux: Math.cos(sa), uy: Math.sin(sa),
+                    r: rS, R: R, va: va, w: ws,
+                    maxReach2: maxReach * maxReach,
+                    killReach: 2 * v / ws + R + v * 0.35,
+                    killValue: 1 + Math.min(3, game.length(s) / 3000)
+                });
+                if (hd < 600) nearHeads++;
+                if (hd2 < sim2) {
+                    grid.add(s.xx, s.yy, obsX.length);
+                    obsX.push(s.xx);
+                    obsY.push(s.yy);
+                    obsR.push(rS);
+                    if (rS > maxObsR) maxObsR = rS;
+                }
+                addRay(hdx, hdy, hd, R + va * 0.4);
+            }
+
+            // ¿Rodeado? (antes de añadir el borde del mapa)
+            var blocked = 0;
+            for (j = 0; j < SECTORS; j++) {
+                if (ray[j] < sense * o.encircleRange) blocked++;
+            }
+            var enclosure = blocked / SECTORS;
+            var enclosed = enclosure >= o.encircleThreshold;
+
+            // Borde del mapa en el radar
+            var mx = hx - bot.MID_X, my = hy - bot.MID_Y;
+            var c0 = mx * mx + my * my - bot.MAP_R * bot.MAP_R;
+            for (j = 0; j < SECTORS; j++) {
+                var ux = Math.cos(j * SEC_W), uy = Math.sin(j * SEC_W);
+                var b = mx * ux + my * uy;
+                var exitD = -b + Math.sqrt(Math.max(0, b * b - c0));
+                var freeB = Math.max(0, exitD - rMe - hardM);
+                if (ray[j] > freeB) ray[j] = freeB;
+            }
+
+            // ---------- 2. Comida ----------
+            var turnR = vN / wN;
+            var sinA = Math.sin(cur), cosA = Math.cos(cur);
+            var c1x = hx - sinA * turnR, c1y = hy + cosA * turnR;
+            var c2x = hx + sinA * turnR, c2y = hy - cosA * turnR;
+            var tr2 = turnR * turnR * 1.1;
+            var fX = [], fY = [], fV = [], fS = [];
+            var fgrid = new Grid(64);
+            var foodR2 = o.foodRange * o.foodRange;
+            farFood.fill(0);
+
+            var addFood = function (x, y, sz, mult) {
+                var dx = x - hx, dy = y - hy;
+                var d2 = dx * dx + dy * dy;
+                if (d2 > foodR2) return;
+                var val = sz * sz * mult;
+                if (d2 < sim2) {
+                    fgrid.add(x, y, fX.length);
+                    fX.push(x);
+                    fY.push(y);
+                    fV.push(val);
+                    fS.push(sz * mult);
+                }
+                // La comida dentro de los círculos de giro no se alcanza sin dar una vuelta
+                var e1x = x - c1x, e1y = y - c1y, e2x = x - c2x, e2y = y - c2y;
+                if (e1x * e1x + e1y * e1y < tr2 || e2x * e2x + e2y * e2y < tr2) return;
+                var d = Math.sqrt(d2);
+                var jf = sectorOf(Math.atan2(dy, dx));
+                var att = d < ray[jf] + 40 ? 1 : 0.15; // detrás de un obstáculo vale poco
+                var q = 1 + d / 250;
+                farFood[jf] += val * att / (q * q);
+            };
+
+            var foods = window.foods || [];
+            var nf = foods.length;
+            if (typeof window.foods_c === 'number' && window.foods_c >= 0) {
+                nf = Math.min(nf, window.foods_c);
+            }
+            for (i = 0; i < nf; i++) {
+                var f = foods[i];
+                if (!f || f.eaten || typeof f.xx !== 'number') continue;
+                addFood(f.xx, f.yy, game.foodSize(f), 1);
+            }
+            var preys = window.preys;
+            if (preys && preys.length) {
+                for (i = 0; i < preys.length; i++) {
+                    var pr = preys[i];
+                    if (!pr || pr.eaten || typeof pr.xx !== 'number') continue;
+                    addFood(pr.xx, pr.yy, numOr(pr.sz, 10, 1, 100), 3);
+                }
+            }
+
+            var farMax = 0, farBest = -1, openBest = 0;
+            for (j = 0; j < SECTORS; j++) {
+                var sm = 0.25 * farFood[(j + SECTORS - 1) % SECTORS] + 0.5 * farFood[j] +
+                    0.25 * farFood[(j + 1) % SECTORS];
+                farSm[j] = sm;
+                if (sm > farMax) {
+                    farMax = sm;
+                    farBest = j;
+                }
+                if (ray[j] > ray[openBest]) openBest = j;
+            }
+
+            // ---------- 3. Candidatos ----------
+            var prevTarget = bot.lastTarget !== undefined ? bot.lastTarget : cur;
+            var targets = [];
+            for (k = 0; k < OFFSETS.length; k++) targets.push(cur + OFFSETS[k]);
+            targets.push(prevTarget);
+            if (farBest >= 0) targets.push(farBest * SEC_W);
+            targets.push(openBest * SEC_W);
+
+            var ctx = {
+                hx: hx, hy: hy, ang: cur, prevTarget: prevTarget,
+                rMe: rMe, hardM: hardM, softAbs: softAbs,
+                vN: vN, vB: vB, wN: wN, wB: wB,
+                horizon: horizon, steps: steps,
+                grid: grid, obsX: obsX, obsY: obsY, obsR: obsR,
+                rq: maxObsR + rMe + hardM + softAbs,
+                heads: heads, headStamp: new Int32Array(heads.length),
+                fgrid: fgrid, fX: fX, fY: fY, fV: fV, fS: fS,
+                foodStamp: new Int32Array(fX.length),
+                eatR: Math.max(30, o.eatRadius * width + 10),
+                hunt: o.hunt,
+                midX: bot.MID_X, midY: bot.MID_Y, mapR: bot.MAP_R
+            };
+
+            var results = [];
+            var cid = 0;
+            for (k = 0; k < targets.length; k++) {
+                results.push(bot.simulate(ctx, targets[k], false, ++cid, false));
+            }
+
+            var anySafe = false;
+            for (k = 0; k < results.length; k++) {
+                if (results[k].tc === Infinity) {
+                    anySafe = true;
+                    break;
+                }
+            }
+            var escaping = !anySafe || enclosed;
+            var lenOK = bot.snakeLength > 0 ?
+                bot.snakeLength >= o.boostMinLength : game.scale(me) >= 1.4;
+            if (o.autoBoost && typeof window.setAcceleration === 'function' &&
+                (escaping || lenOK)) {
+                for (k = 0; k < targets.length; k++) {
+                    results.push(bot.simulate(ctx, targets[k], true, ++cid, false));
+                }
+            }
+
+            // ---------- 4. Puntuación ----------
+            var maxFood = 0;
+            for (k = 0; k < results.length; k++) {
+                if (results[k].food > maxFood) maxFood = results[k].food;
+            }
+            var foodMul = enclosed ? 0.3 : 1;
+            var openMul = enclosed ? 3 : 1;
+            var dcx = bot.MID_X - hx, dcy = bot.MID_Y - hy;
+            var dc = Math.sqrt(dcx * dcx + dcy * dcy);
+            var edgeF = dc / bot.MAP_R;
+            var centerF = edgeF > 0.55 ? (edgeF - 0.55) / 0.45 : 0;
+            var centerAng = Math.atan2(dcy, dcx);
+
+            var best = null, bestScore = -Infinity;
+            for (k = 0; k < results.length; k++) {
+                var r = results[k];
+                var sc = 0;
+                if (r.tc !== Infinity) {
+                    sc -= 100 + 900 * (1 - r.tc / horizon);
+                } else if (r.minClear < softAbs) {
+                    sc -= W.near * (1 - Math.max(0, r.minClear) / softAbs);
+                }
+                var je = sectorOf(r.endH);
+                var openV = Math.sqrt(Math.min(ray[(je + SECTORS - 1) % SECTORS], ray[je],
+                    ray[(je + 1) % SECTORS]) / sense);
+                sc += W.open * openMul * openV;
+                if (maxFood > 0) sc += W.food * foodMul * r.food / maxFood;
+                if (farMax > 0) sc += W.far * foodMul * farSm[je] / farMax;
+                sc += W.kill * r.kill;
+                sc -= W.turn * Math.abs(angDiff(cur, r.target)) / Math.PI;
+                if (Math.abs(angDiff(prevTarget, r.target)) < 0.12) sc += W.keep;
+                if (centerF > 0) {
+                    sc += W.center * centerF * Math.max(0, Math.cos(angDiff(r.endH, centerAng)));
+                }
+                if (r.boost) {
+                    var pen = W.boost * (bot.lastAccel === 1 ? 0.6 : 1);
+                    var justified = escaping || r.kill > 0 || r.foodSz >= o.foodBoostMin;
+                    if (!justified) pen += W.boostBad;
+                    sc -= pen;
+                }
+                r.score = sc;
+                if (sc > bestScore) {
+                    bestScore = sc;
+                    best = r;
+                }
+            }
+
+            bot.targetAngle = best.target;
+            bot.lastTarget = best.target;
+            bot.wantAccel = best.boost ? 1 : 0;
+
+            if (best.tc !== Infinity) bot.mode = 'esquivar';
+            else if (best.kill > 0) bot.mode = 'cazar';
+            else if (enclosed) bot.mode = 'escapar';
+            else if (best.boost) bot.mode = escaping ? 'escapar' : 'turbo comida';
+            else if (best.food > 0 || farMax > 0) bot.mode = 'comer';
+            else bot.mode = 'explorar';
+
+            if (window.visualDebugging) {
+                var rec = bot.simulate(ctx, best.target, best.boost, ++cid, true);
+                var ends = [];
+                for (k = 0; k < results.length; k++) {
+                    ends.push({
+                        x: results[k].endX, y: results[k].endY,
+                        safe: results[k].tc === Infinity, boost: results[k].boost
+                    });
+                }
+                bot.debug = { path: rec.path, boost: best.boost, ends: ends, heads: heads };
+            } else {
+                bot.debug = null;
+            }
+
+            bot.enclosure = enclosure;
+            bot.nearHeads = nearHeads;
+            bot.planMs = bot.planMs * 0.9 + (performance.now() - t0) * 0.1;
+        },
+
+        go: function () {
+            var me = game.me;
+            if (!me || typeof me.xx !== 'number') return;
+
+            var grd = numOr(window.grd, 0, 1000, 1e6);
+            if (grd) {
+                bot.MID_X = grd;
+                bot.MID_Y = grd;
+                bot.MAP_R = grd * 0.98;
+            }
+
+            bot.updateLength();
+
+            var now = performance.now();
+            // Si el plan es lento, se espacia automáticamente para no bajar los fps
+            var interval = Math.max(bot.opt.planInterval, bot.planMs * 2.5);
+            if (bot.targetAngle === undefined || now - bot.lastPlan >= interval) {
+                bot.lastPlan = now;
+                bot.plan();
+            }
+
+            bot.steer();
+            bot.setAccel(bot.defaultAccel === 1 ? 1 : bot.wantAccel);
+        }
+    };
+})(window);
+
+// ===========================================================================
+// INTERFAZ Y BUCLE PRINCIPAL
+// ===========================================================================
+var userInterface = window.userInterface = (function (window, document) {
+    function noopMouseMove() { }
+
+    return {
+        overlays: {},
+        gfxEnabled: true,
+        lastError: '',
+        lastTick: 0,
+        lastOverlayUpdate: 0,
+        loopMode: '-',
+        wasPlaying: false,
+        respawnTimer: undefined,
+        savedMouseMove: null,
+        frameCount: 0,
+        fps: 0,
+        fpsTime: 0,
+
+        escapeHtml: function (s) {
+            return String(s).replace(/[&<>"]/g, function (c) {
+                return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+            });
+        },
+
+        reportError: function (err) {
+            var msg = (err && err.message) ? err.message : String(err);
+            if (msg !== userInterface.lastError) {
+                userInterface.lastError = msg;
+                console.error('[Slither.io-bot] Error:', err);
+            }
+        },
+
+        takeMouse: function () {
+            if (window.onmousemove !== noopMouseMove) {
+                userInterface.savedMouseMove = window.onmousemove;
+                window.onmousemove = noopMouseMove;
+            }
+        },
+
+        releaseMouse: function () {
+            if (window.onmousemove === noopMouseMove) {
+                window.onmousemove = userInterface.savedMouseMove || null;
+            }
+            if (bot.lastAccel === 1) {
+                if (game.me && typeof window.setAcceleration === 'function') {
+                    try {
+                        window.setAcceleration(0);
+                    } catch (e) { /* sin serpiente */ }
+                }
+                bot.lastAccel = 0;
+            }
+        },
+
+        countFrame: function () {
+            var now = Date.now();
+            userInterface.frameCount++;
+            if (now - userInterface.fpsTime >= 1000) {
+                userInterface.fps = userInterface.frameCount;
+                userInterface.frameCount = 0;
+                userInterface.fpsTime = now;
+            }
+        },
+
+        safeTick: function (source) {
+            userInterface.lastTick = Date.now();
+            userInterface.loopMode = source;
+            try {
+                userInterface.tick();
+            } catch (err) {
+                userInterface.reportError(err);
+            }
+        },
+
+        tick: function () {
+            userInterface.countFrame();
+            game.refresh();
+            var playing = game.isPlaying();
+
+            if (playing) {
+                if (!userInterface.wasPlaying) {
+                    userInterface.onSpawn();
+                }
+                userInterface.wasPlaying = true;
+
+                if (bot.isBotEnabled) {
+                    userInterface.takeMouse();
+                    bot.isBotRunning = true;
+                    bot.go();
+                } else {
+                    userInterface.releaseMouse();
+                    bot.isBotRunning = false;
+                    bot.updateLength();
+                }
+            } else {
+                if (userInterface.wasPlaying) {
+                    userInterface.onDeath();
+                }
+                userInterface.wasPlaying = false;
+                userInterface.releaseMouse();
+                bot.isBotRunning = false;
+            }
+
+            userInterface.onFrameUpdate();
+        },
+
+        onSpawn: function () {
+            window.clearTimeout(userInterface.respawnTimer);
+            bot.resetPlan();
+            bot.lastAccel = -1;
+        },
+
+        onDeath: function () {
+            if (bot.lastLength > 0) {
+                bot.scores.push(bot.lastLength);
+                bot.scores.sort(function (a, b) { return b - a; });
+                userInterface.updateStats();
+            }
+            bot.lastLength = 0;
+            bot.resetPlan();
+            if (window.autoRespawn && bot.isBotEnabled) {
+                window.clearTimeout(userInterface.respawnTimer);
+                userInterface.respawnTimer = window.setTimeout(function () {
+                    game.refresh();
+                    if (!game.isPlaying()) {
+                        bot.connect();
+                    }
+                }, 2500);
+            }
+        },
+
+        // Se engancha a redraw; si no existe o el juego no lo llama,
+        // un temporizador de respaldo mantiene el bot activo.
+        installLoop: function () {
+            if (typeof window.redraw === 'function') {
+                var originalRedraw = window.redraw;
+                window.redraw = function () {
+                    canvas.maintainZoom();
+                    if (userInterface.gfxEnabled) {
+                        originalRedraw.apply(this, arguments);
+                    }
+                    userInterface.safeTick('redraw');
+                };
+            }
+            window.setInterval(function () {
+                if (Date.now() - userInterface.lastTick > 150) {
+                    userInterface.safeTick('temporizador');
+                }
+            }, 50);
+        },
+
+        initServerIp: function () {
+            var parent = document.getElementById('playh');
+            if (!parent) return;
+
+            var serverDiv = document.createElement('div');
+            var serverIn = document.createElement('input');
+
+            serverDiv.style.width = '244px';
+            serverDiv.style.margin = '-30px auto';
+            serverDiv.style.boxShadow = 'rgb(0, 0, 0) 0px 6px 50px';
+            serverDiv.style.opacity = 1;
+            serverDiv.style.background = 'rgb(76, 68, 124)';
+            serverDiv.className = 'taho';
+            serverDiv.style.display = 'block';
+
+            serverIn.className = 'sumsginp';
+            serverIn.placeholder = '0.0.0.0:444';
+            serverIn.maxLength = 21;
+            serverIn.style.width = '220px';
+            serverIn.style.height = '24px';
+
+            serverDiv.appendChild(serverIn);
+            parent.appendChild(serverDiv);
+
+            userInterface.server = serverIn;
+        },
+
+        makeOverlay: function (styles, zIndex) {
+            var d = document.createElement('div');
+            d.style.position = 'fixed';
+            d.style.color = '#C0C0C0';
+            d.style.fontFamily = 'Consolas, Verdana';
+            d.style.zIndex = zIndex || 999;
+            d.style.fontSize = '14px';
+            d.style.padding = '5px';
+            d.style.pointerEvents = 'none';
+            d.className = 'nsi';
+            Object.keys(styles).forEach(function (k) {
+                d.style[k] = styles[k];
+            });
+            document.body.appendChild(d);
+            return d;
+        },
+
+        initOverlays: function () {
+            userInterface.overlays.botOverlay = userInterface.makeOverlay(
+                { right: '5px', bottom: '112px', width: '260px', textAlign: 'right' });
+            userInterface.overlays.serverOverlay = userInterface.makeOverlay(
+                { right: '5px', bottom: '5px', width: '160px' });
+            userInterface.overlays.prefOverlay = userInterface.makeOverlay(
+                { left: '10px', top: '75px', width: '300px' });
+            userInterface.overlays.statsOverlay = userInterface.makeOverlay(
+                { left: '10px', top: '330px', width: '160px' }, 998);
+        },
+
+        toggleOverlays: function () {
+            Object.keys(userInterface.overlays).forEach(function (okey) {
+                var ov = userInterface.overlays[okey];
+                ov.style.visibility = ov.style.visibility !== 'hidden' ? 'hidden' : 'visible';
+            });
+        },
+
+        toggleGfx: function () {
+            if (userInterface.gfxEnabled) {
+                var c = canvas.getContext();
+                if (c && window.mc) {
+                    c.save();
+                    c.fillStyle = '#000000';
+                    c.fillRect(0, 0, window.mc.width, window.mc.height);
+                    c.restore();
+                }
+                userInterface.gfxOverlay = userInterface.makeOverlay({
+                    top: '50%', left: '50%', width: '200px', height: '60px',
+                    margin: '-30px 0 0 -100px', fontSize: '20px', textAlign: 'center'
+                });
+                if (window.lbf) {
+                    window.lbf.innerHTML = '';
+                }
+            } else if (userInterface.gfxOverlay) {
+                document.body.removeChild(userInterface.gfxOverlay);
+                userInterface.gfxOverlay = undefined;
+            }
+            userInterface.gfxEnabled = !userInterface.gfxEnabled;
+        },
+
+        savePreference: function (item, value) {
+            try {
+                window.localStorage.setItem(item, value);
+            } catch (e) { /* almacenamiento no disponible */ }
+            userInterface.onPrefChange();
+        },
+
+        loadPreference: function (preference, defaultVar) {
+            var savedItem = null;
+            try {
+                savedItem = window.localStorage.getItem(preference);
+            } catch (e) { /* almacenamiento no disponible */ }
+            if (savedItem !== null) {
+                if (savedItem === 'true') {
+                    window[preference] = true;
+                } else if (savedItem === 'false') {
+                    window[preference] = false;
+                } else {
+                    window[preference] = savedItem;
+                }
+            } else {
+                window[preference] = defaultVar;
+            }
+            userInterface.onPrefChange();
+            return window[preference];
+        },
+
+        findPlayButton: function () {
+            if (window.play_btn && window.play_btn.btnf) {
+                return window.play_btn.btnf;
+            }
+            return document.querySelector('#playh .btnt') ||
+                document.querySelector('.btnt.sadg1') || null;
+        },
+
+        playButtonClickListener: function () {
+            userInterface.saveNick();
+            userInterface.loadPreference('autoRespawn', false);
+
+            if (userInterface.server && userInterface.server.value) {
+                var s = userInterface.server.value.split(':');
+                if (s.length === 2) {
+                    window.force_ip = s[0];
+                    window.force_port = s[1];
+                    bot.connect();
+                }
+            } else {
+                window.force_ip = undefined;
+                window.force_port = undefined;
+            }
+        },
+
+        saveNick: function () {
+            var nickInput = document.getElementById('nick');
+            if (nickInput) {
+                userInterface.savePreference('savedNick', nickInput.value);
+            }
+        },
+
+        hideTop: function () {
+            var nsidivs = document.querySelectorAll('div.nsi');
+            for (var i = 0; i < nsidivs.length; i++) {
+                if (nsidivs[i].style.top === '4px' && nsidivs[i].style.width === '300px') {
+                    nsidivs[i].style.visibility = 'hidden';
+                    window.topscore = nsidivs[i];
+                }
+            }
+        },
+
+        onkeydown: function (e) {
+            if (!game.isPlaying()) return;
+
+            switch (e.keyCode) {
+                case 84: // T: activar/desactivar bot
+                    bot.isBotEnabled = !bot.isBotEnabled;
+                    break;
+                case 75: // K: caza
+                    bot.opt.hunt = !bot.opt.hunt;
+                    userInterface.savePreference('botHunt', bot.opt.hunt);
+                    break;
+                case 66: // B: turbo automático
+                    bot.opt.autoBoost = !bot.opt.autoBoost;
+                    userInterface.savePreference('botAutoBoost', bot.opt.autoBoost);
+                    break;
+                case 65: // A: más margen de seguridad
+                    bot.opt.hardMargin = Math.min(60, bot.opt.hardMargin + 4);
+                    userInterface.savePreference('botMargin', bot.opt.hardMargin);
+                    break;
+                case 83: // S: menos margen de seguridad
+                    bot.opt.hardMargin = Math.max(0, bot.opt.hardMargin - 4);
+                    userInterface.savePreference('botMargin', bot.opt.hardMargin);
+                    break;
+                case 85: // U: log en consola
+                    window.logDebugging = !window.logDebugging;
+                    userInterface.savePreference('logDebugging', window.logDebugging);
+                    break;
+                case 89: // Y: depuración visual
+                    window.visualDebugging = !window.visualDebugging;
+                    userInterface.savePreference('visualDebugging', window.visualDebugging);
+                    break;
+                case 73: // I: reaparecer automáticamente
+                    window.autoRespawn = !window.autoRespawn;
+                    userInterface.savePreference('autoRespawn', window.autoRespawn);
+                    break;
+                case 72: // H: ocultar paneles
+                    userInterface.toggleOverlays();
+                    break;
+                case 71: // G: sin gráficos
+                    userInterface.toggleGfx();
+                    break;
+                case 79: // O: renderizado móvil
+                    userInterface.toggleMobileRendering(!window.mobileRender);
+                    break;
+                case 90: // Z: restablecer zoom
+                    canvas.resetZoom();
+                    break;
+                case 81: // Q: salir al menú
+                    window.autoRespawn = false;
+                    userInterface.quit();
+                    break;
+                case 27: // ESC: reaparecer rápido
+                    bot.quickRespawn();
+                    break;
+            }
+            userInterface.onPrefChange();
+        },
+
+        onmousedown: function (e) {
+            if (!game.isPlaying()) return;
+            if (e.button === 0) {
+                bot.defaultAccel = 1; // clic izquierdo: turbo manual
+            } else if (e.button === 2) {
+                bot.isBotEnabled = !bot.isBotEnabled; // clic derecho: bot on/off
+                userInterface.onPrefChange();
+            }
+        },
+
+        onmouseup: function () {
+            bot.defaultAccel = 0;
+        },
+
+        toggleMobileRendering: function (mobileRendering) {
+            window.mobileRender = mobileRendering;
+            userInterface.savePreference('mobileRender', window.mobileRender);
+            if (window.mobileRender) {
+                window.render_mode = 1;
+                window.want_quality = 0;
+                window.high_quality = false;
+            } else {
+                window.render_mode = 2;
+                window.want_quality = 1;
+                window.high_quality = true;
+            }
+        },
+
+        updateStats: function () {
+            var o = [];
+            var s = bot.scores;
+            if (s.length === 0) return;
+
+            var median = Math.round((s[Math.floor((s.length - 1) / 2)] +
+                s[Math.ceil((s.length - 1) / 2)]) / 2);
+            var avg = Math.round(s.reduce(function (a, b) { return a + b; }) / s.length);
+
+            o.push('partidas: ' + s.length);
+            o.push('media: ' + avg + ' mediana: ' + median);
+            for (var i = 0; i < s.length && i < 10; i++) {
+                o.push((i + 1) + '. ' + s[i]);
+            }
+            userInterface.overlays.statsOverlay.innerHTML = o.join('<br/>');
+        },
+
+        onPrefChange: function () {
+            if (!userInterface.overlays.prefOverlay) return;
+            var ht = userInterface.handleTextColor;
+            var o = [];
+
+            o.push('versión: ' + SCRIPT_VERSION);
+            o.push('[T / clic dcho] bot: ' + ht(bot.isBotEnabled));
+            o.push('[K] caza: ' + ht(bot.opt.hunt));
+            o.push('[B] turbo automático: ' + ht(bot.opt.autoBoost));
+            o.push('[A/S] margen seguridad: ' + bot.opt.hardMargin);
+            o.push('[I] reaparecer solo: ' + ht(window.autoRespawn));
+            o.push('[Y] depuración visual: ' + ht(window.visualDebugging));
+            o.push('[U] log consola: ' + ht(window.logDebugging));
+            o.push('[O] render móvil: ' + ht(window.mobileRender));
+            o.push('[G] sin gráficos · [H] ocultar paneles');
+            o.push('[Rueda] zoom · [Z] reset zoom');
+            o.push('[ESC] reaparecer · [Q] menú');
+
+            userInterface.overlays.prefOverlay.innerHTML = o.join('<br/>');
+        },
+
+        onFrameUpdate: function () {
+            var me = game.me;
+            var playing = game.isPlaying();
+            var now = Date.now();
+
+            if (now - userInterface.lastOverlayUpdate > 100 && userInterface.overlays.botOverlay) {
+                userInterface.lastOverlayUpdate = now;
+                var o = [];
+                o.push('fps: ' + userInterface.fps + ' · bucle: ' + userInterface.loopMode +
+                    ' · plan: ' + bot.planMs.toFixed(1) + ' ms');
+                o.push('serpiente: ' + (me ?
+                    '<span style="color:#6f6">detectada (' + (window.slither ? 'slither' : 'snake') + ')</span>' :
+                    '<span style="color:orange">no detectada</span>'));
+                o.push('estado: ' + (playing ?
+                    (bot.isBotRunning ? '<span style="color:#6f6">bot jugando</span>' : 'control manual') :
+                    'menú / muerto'));
+                if (playing) {
+                    o.push('modo: ' + bot.mode + (bot.lastAccel === 1 ? ' (turbo)' : ''));
+                    o.push('longitud: ' + bot.snakeLength +
+                        ' · puesto: ' + (window.rank || '?') + '/' + (window.snake_count || '?'));
+                    o.push('rodeado: ' + Math.round(bot.enclosure * 100) + '% · cabezas cerca: ' +
+                        bot.nearHeads);
+                    o.push('x: ' + Math.round(me.xx) + ' y: ' + Math.round(me.yy));
+                }
+                if (userInterface.lastError) {
+                    o.push('<span style="color:#f66">error: ' +
+                        userInterface.escapeHtml(userInterface.lastError.slice(0, 80)) + '</span>');
+                }
+                userInterface.overlays.botOverlay.innerHTML = o.join('<br/>');
+
+                if (userInterface.gfxOverlay && playing) {
+                    userInterface.gfxOverlay.innerHTML = '<b>' +
+                        userInterface.escapeHtml(me.nk || '') + '</b><br/>' + bot.snakeLength +
+                        '<br/>[' + (window.rank || '?') + '/' + (window.snake_count || '?') + ']';
+                }
+
+                if (window.bso && userInterface.overlays.serverOverlay.innerHTML !==
+                    window.bso.ip + ':' + window.bso.po) {
+                    userInterface.overlays.serverOverlay.innerHTML =
+                        window.bso.ip + ':' + window.bso.po;
+                }
+            }
+
+            // Depuración visual: trayectoria elegida, finales de candidatos y cabezas rivales
+            if (playing && window.visualDebugging && bot.isBotEnabled && bot.debug) {
+                var dbg = bot.debug;
+                var i;
+                for (i = 0; i < dbg.heads.length; i++) {
+                    var hh = dbg.heads[i];
+                    canvas.drawCircle(hh.x, hh.y, hh.R, 'orange', false, 0.8);
+                    canvas.drawLine({ x: hh.x, y: hh.y },
+                        { x: hh.x + hh.ux * hh.va * 0.5, y: hh.y + hh.uy * hh.va * 0.5 },
+                        'orange', 2);
+                }
+                for (i = 0; i < dbg.ends.length; i++) {
+                    var en = dbg.ends[i];
+                    canvas.drawCircle(en.x, en.y, en.boost ? 4 : 6,
+                        en.safe ? '#33ff66' : '#ff3333', true, en.boost ? 0.4 : 0.8);
+                }
+                if (dbg.path) {
+                    canvas.drawPolyline(dbg.path, dbg.boost ? '#ffee00' : '#00e5ff', 3);
+                }
+            }
+        },
+
+        quit: function () {
+            if (game.isPlaying() && typeof window.resetGame === 'function') {
+                window.want_close_socket = true;
+                window.dead_mtm = 0;
+                if (window.play_btn && typeof window.play_btn.setEnabled === 'function') {
+                    window.play_btn.setEnabled(true);
+                }
+                window.resetGame();
+            }
+        },
+
+        handleTextColor: function (enabled) {
+            return '<span style="color:' +
+                (enabled ? 'green;">activado' : 'red;">desactivado') + '</span>';
+        }
+    };
+})(window, document);
+
+// ===========================================================================
+// ARRANQUE
+// ===========================================================================
+function startBot() {
+    userInterface.initOverlays();
+
+    var playBtn = userInterface.findPlayButton();
+    userInterface.initServerIp();
+    userInterface.hideTop();
+
+    document.addEventListener('keydown', userInterface.onkeydown);
+    window.addEventListener('mousedown', userInterface.onmousedown);
+    window.addEventListener('mouseup', userInterface.onmouseup);
+    window.addEventListener('contextmenu', function (e) {
+        if (game.isPlaying()) e.preventDefault();
+    });
+
+    if (playBtn) {
+        playBtn.addEventListener('click', userInterface.playButtonClickListener);
+    }
+    if (userInterface.server) {
+        userInterface.server.addEventListener('keyup', function (e) {
+            if (e.keyCode === 13) {
+                e.preventDefault();
+                if (playBtn) {
+                    playBtn.click();
+                } else {
+                    userInterface.playButtonClickListener();
+                }
+            }
+        });
+    }
+
+    userInterface.loadPreference('logDebugging', false);
+    userInterface.loadPreference('visualDebugging', false);
+    userInterface.loadPreference('autoRespawn', false);
+    userInterface.loadPreference('mobileRender', false);
+
+    // Preferencias del bot
+    bot.opt.hunt = userInterface.loadPreference('botHunt', true) !== false;
+    bot.opt.autoBoost = userInterface.loadPreference('botAutoBoost', true) !== false;
+    var margin = parseFloat(userInterface.loadPreference('botMargin', bot.opt.hardMargin));
+    if (isFinite(margin)) bot.opt.hardMargin = margin;
+
+    var nickInput = document.getElementById('nick');
+    var hadSavedNick = false;
+    try {
+        hadSavedNick = window.localStorage.getItem('savedNick') !== null;
+    } catch (e) { /* sin almacenamiento */ }
+    var savedNick = userInterface.loadPreference('savedNick', 'Slither.io-bot');
+    if (nickInput) {
+        if (hadSavedNick || !nickInput.value) {
+            nickInput.value = savedNick;
+        }
+        nickInput.addEventListener('input', userInterface.saveNick);
+    }
+
+    document.body.addEventListener('wheel', canvas.setZoom, { passive: true });
+
+    userInterface.toggleMobileRendering(!!window.mobileRender);
+
+    try {
+        window.localStorage.setItem('edttsg', '1');
+    } catch (e) { /* sin almacenamiento */ }
+
+    if (window.social && typeof window.social.remove === 'function') {
+        window.social.remove();
+    }
+
+    userInterface.installLoop();
+    userInterface.onPrefChange();
+
+    console.log('[Slither.io-bot] v' + SCRIPT_VERSION + ' iniciado. ' +
+        'Si algo falla, escribe botGame.diagnose() en esta consola durante una partida.');
+}
+
+function waitForGame(callback) {
+    var attempts = 0;
+    var maxAttempts = 600; // ~60 s
+
+    (function check() {
+        var ready = document.body &&
+            typeof window.connect === 'function' &&
+            typeof window.setAcceleration === 'function';
+
+        if (ready) {
+            try {
+                callback();
+            } catch (err) {
+                console.error('[Slither.io-bot] Error al iniciar:', err);
+            }
+        } else if (++attempts < maxAttempts) {
+            setTimeout(check, 100);
+        } else {
+            var missing = ['connect', 'setAcceleration'].filter(function (n) {
+                return typeof window[n] !== 'function';
+            });
+            console.warn('[Slither.io-bot] No se encontró el juego en este marco (' +
+                location.href + '). Faltan: ' + missing.join(', ') + '.');
+        }
+    })();
+}
+
+waitForGame(startBot);
