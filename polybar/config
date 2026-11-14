@@ -34,8 +34,8 @@ font-4 = "CaskaydiaCove Nerd Font:size=11;2"
 font-5 = "CaskaydiaCove Nerd Font:size=11;2"
 
 modules-left = launcher bspwm
-modules-center = spotify-status
-modules-right = pulseaudio temperature updates time powermenu
+modules-center = media
+modules-right = pulseaudio updates time powermenu
 
 scroll-up = bspwm-wsnext
 scroll-down = bspwm-wsprev
@@ -53,13 +53,13 @@ click-left = rofi -show drun -theme ~/.config/rofi/config.rasi
 
 [module/updates]
 type = custom/script
-exec = sh -c 'if command -v paru >/dev/null 2>&1; then paru -Qu; elif command -v yay >/dev/null 2>&1; then yay -Qu; else pacman -Qu; fi' 2>/dev/null | wc -l
-exec-if = sh -c 'if command -v paru >/dev/null 2>&1; then paru -Qu; elif command -v yay >/dev/null 2>&1; then yay -Qu; else pacman -Qu; fi' 2>/dev/null | grep -q .
-format = " <label> updates"
+; imprime el número de paquetes por actualizar (nada si no hay: el módulo se oculta); ver bin/updates_count.sh
+exec = ~/.config/bin/updates_count.sh
+interval = 600
+format = " <label>"
 format-margin = 8
-tail = true
-interval = 300
-click-left = alacritty -e sh -c 'paru -Syu || yay -Syu || pacman -Syu'
+label = %output% updates
+click-left = alacritty -e sh -c 'paru -Syu || yay -Syu || sudo pacman -Syu'
 
 [module/xwindow]
 type = internal/xwindow
@@ -131,7 +131,7 @@ interval = 10
 format-margin = 4
 
 time = "%H:%M"
-date = "%d %b %Y"
+date = "%d %b"
 
 label = %time% | %date%
 label-background = ${colors.background}
@@ -197,6 +197,17 @@ menu-0-1 = reboot
 menu-0-1-exec = reboot
 menu-0-2 = poweroff
 menu-0-2-exec = poweroff
+
+[module/media]
+type = custom/script
+; cualquier reproductor MPRIS (Spotify, Firefox, mpv…): ver bin/media_status.sh
+exec = ~/.config/bin/media_status.sh
+interval = 1
+format = <label>
+format-underline = #1DB954
+click-left = playerctl play-pause
+click-right = playerctl next
+click-middle = playerctl previous
 
 [module/spotify-status]
 type = custom/script

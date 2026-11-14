@@ -154,3 +154,27 @@ super + shift + n
 # random wallpaper
 super + alt + n
 	~/.config/bin/wallpaper.sh random
+
+#
+# focus con Ctrl + flechas (con Mayús, mover la ventana)
+#
+ctrl + {Left,Down,Up,Right}
+	bspc node -f {west,south,north,east}
+ctrl + shift + {Left,Down,Up,Right}
+	bspc node -s {west,south,north,east}
+
+#
+# capturas, bloqueo y multimedia
+#
+Print
+	maim -u ~/Pictures/captura-$(date +%F_%H-%M-%S).png
+super + shift + s
+	maim -s -u | xclip -selection clipboard -t image/png
+super + l
+	loginctl lock-session
+XF86Audio{RaiseVolume,LowerVolume}
+	pactl set-sink-volume @DEFAULT_SINK@ {+,-}5%
+XF86AudioMute
+	pactl set-sink-mute @DEFAULT_SINK@ toggle
+XF86Audio{Play,Next,Prev}
+	playerctl {play-pause,next,previous}

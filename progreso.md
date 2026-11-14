@@ -184,3 +184,11 @@ el log de la instalación lo tiene todo: `~/.cache/dotfiles-2026/install-*.log`.
    Ahora se compara el fichero con `cksum` antes y después.
 9. Error de sintaxis al final de un run: era yo editando `install.sh` mientras se
    ejecutaba (bash lee por offset de byte). No es un fallo del script.
+
+## 2026-11-14 — correcciones (revisión para BC OS)
+- `picom/picom.conf`: la condición `"_GTK_FRAME_EXTENTS"` era inválida (picom exige el operador `@`: `"_GTK_FRAME_EXTENTS@"`); `vsync = false` con el backend `xrender`.
+- `polybar/config`: el módulo `updates` usaba `tail = true` con `interval` (solo imprimía una vez y no se refrescaba); ahora llama a `bin/updates_count.sh` (checkupdates/paru/yay) y se oculta si no hay nada. Nuevo módulo `media` genérico (cualquier reproductor MPRIS, `bin/media_status.sh`) en el centro; reloj `HH:MM | dd Mon`.
+- `rofi/config.rasi`: `drun-display-format: "{name}"` (con `{icon}` rofi 2.x ocultaba los iconos).
+- `sxhkd/sxhkdrc`: Ctrl+flechas para cambiar de ventana (con Mayús, mover), capturas con `maim`, bloqueo, volumen y multimedia.
+- Las rutas `/home/<usuario>` de `nitrogen/` y `pcmanfm/` se siguen corrigiendo en la instalación (`fix_hardcoded_paths`).
+- Versión adaptada y probada dentro de BC OS: <https://github.com/borjacandeel/BC-OS> (`build/overlay-dotfiles/`).
